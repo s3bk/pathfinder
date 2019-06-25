@@ -111,7 +111,18 @@ impl CanvasRenderingContext2D {
                                     HintingOptions::None,
                                     paint_id));
     }
-    
+
+    pub fn stroke_layout(&mut self, layout: &Layout, transform: Transform2DF) {
+        let paint_id = self.scene.push_paint(&self.current_state.stroke_paint);
+        let render_mode = TextRenderMode::Stroke(self.current_state.resolve_stroke_style());
+        drop(self.scene.push_layout(&layout,
+                                    &TextStyle { size: self.current_state.font_size },
+                                    &transform.post_mul(&self.current_state.transform),
+                                    render_mode,
+                                    HintingOptions::None,
+                                    paint_id));
+    }
+
     fn fill_or_stroke_text(&mut self,
                            string: &str,
                            mut position: Vector2F,
