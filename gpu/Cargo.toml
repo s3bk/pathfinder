@@ -5,6 +5,10 @@ authors = ["Patrick Walton <pcwalton@mimiga.net>"]
 edition = "2018"
 
 [dependencies]
+phf = "0.7.23"
+
+[build-dependencies]
+phf_codegen = "0.7.24"
 
 [dependencies.image]
 version = "0.21"
