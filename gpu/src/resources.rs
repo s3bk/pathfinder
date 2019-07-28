@@ -74,7 +74,6 @@ static RESOURCES: phf::Map<&'static str, &'static [u8]> = include!(concat!(env!(
 
 impl ResourceLoader for EmbeddedResourceLoader {
     fn slurp(&self, virtual_path: &str) -> Result<Cow<'static, [u8]>, IOError> {
-        println!("{}", virtual_path);
         match RESOURCES.get(virtual_path) {
             Some(&data) => Ok(data.into()),
             None => Err(ErrorKind::NotFound.into())
