@@ -120,6 +120,17 @@ impl Outline {
         &self.contours
     }
 
+    #[inline]
+    pub fn clear(&mut self) {
+        self.contours.clear();
+        self.bounds = RectF::default();
+    }
+    
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.contours.len()
+    }
+    
     pub fn push_contour(&mut self, contour: Contour) {
         if contour.is_empty() {
             return;
@@ -132,17 +143,6 @@ impl Outline {
         }
 
         self.contours.push(contour);
-    }
-    
-    #[inline]
-    pub fn clear(&mut self) {
-        self.segments.clear();
-        self.bounds = RectF::default();
-    }
-    
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.segments.is_empty()
     }
 
     pub fn transform(&mut self, transform: &Transform2F) {
@@ -327,6 +327,14 @@ impl Contour {
     #[inline]
     pub fn close(&mut self) {
         self.closed = true;
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.points.clear();
+        self.flags.clear();
+        self.bounds = RectF::default();
+        self.closed = false;
     }
 
     // TODO(pcwalton): SIMD.
