@@ -133,6 +133,17 @@ impl Outline {
 
         self.contours.push(contour);
     }
+    
+    #[inline]
+    pub fn clear(&mut self) {
+        self.segments.clear();
+        self.bounds = RectF::default();
+    }
+    
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
 
     pub fn transform(&mut self, transform: &Transform2F) {
         if transform.is_identity() {
