@@ -14,13 +14,14 @@
 extern crate log;
 
 use gl::types::{GLboolean, GLchar, GLenum, GLfloat, GLint, GLsizei, GLsizeiptr, GLuint, GLvoid};
+use half::f16;
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::vector::Vector2I;
 use pathfinder_gpu::resources::ResourceLoader;
-use pathfinder_gpu::{RenderTarget, BlendState, BufferData, BufferTarget, BufferUploadMode};
+use pathfinder_gpu::{RenderTarget, BlendFunc, BlendOp, BufferData, BufferTarget, BufferUploadMode};
 use pathfinder_gpu::{ClearOps, DepthFunc, Device, Primitive, RenderOptions, RenderState};
-use pathfinder_gpu::{ShaderKind, StencilFunc, TextureData, TextureFormat, UniformData};
-use pathfinder_gpu::{VertexAttrClass, VertexAttrDescriptor, VertexAttrType};
+use pathfinder_gpu::{ShaderKind, StencilFunc, TextureData, TextureDataRef, TextureFormat};
+use pathfinder_gpu::{UniformData, VertexAttrClass, VertexAttrDescriptor, VertexAttrType};
 use pathfinder_simd::default::F32x4;
 use std::ffi::CString;
 use std::mem;
@@ -86,28 +87,35 @@ impl GLDevice {
         unsafe {
             // Set blend.
             match render_options.blend {
-                BlendState::Off => {
+                None => {
                     gl::Disable(gl::BLEND); ck();
                 }
-                BlendState::RGBOneAlphaOne => {
-                    gl::BlendEquation(gl::FUNC_ADD); ck();
-                    gl::BlendFunc(gl::ONE, gl::ONE); ck();
-                    gl::Enable(gl::BLEND); ck();
-                }
-                BlendState::RGBOneAlphaOneMinusSrcAlpha => {
-                    gl::BlendEquation(gl::FUNC_ADD); ck();
-                    gl::BlendFuncSeparate(gl::ONE,
-                                          gl::ONE_MINUS_SRC_ALPHA,
-                                          gl::ONE,
-                                          gl::ONE); ck();
-                    gl::Enable(gl::BLEND); ck();
-                }
-                BlendState::RGBSrcAlphaAlphaOneMinusSrcAlpha => {
-                    gl::BlendEquation(gl::FUNC_ADD); ck();
-                    gl::BlendFuncSeparate(gl::SRC_ALPHA,
-                                          gl::ONE_MINUS_SRC_ALPHA,
-                                          gl::ONE,
-                                          gl::ONE); ck();
+                Some(ref blend) => {
+                    match blend.func {
+                        BlendFunc::RGBOneAlphaOne => {
+                            gl::BlendFunc(gl::ONE, gl::ONE); ck();
+                        }
+                        BlendFunc::RGBOneAlphaOneMinusSrcAlpha => {
+                            gl::BlendFuncSeparate(gl::ONE,
+                                                  gl::ONE_MINUS_SRC_ALPHA,
+                                                  gl::ONE,
+                                                  gl::ONE); ck();
+                        }
+                        BlendFunc::RGBSrcAlphaAlphaOneMinusSrcAlpha => {
+                            gl::BlendFuncSeparate(gl::SRC_ALPHA,
+                                                  gl::ONE_MINUS_SRC_ALPHA,
+                                                  gl::ONE,
+                                                  gl::ONE); ck();
+                        }
+                    }
+                    match blend.op {
+                        BlendOp::Add => {
+                            gl::BlendEquation(gl::FUNC_ADD); ck();
+                        }
+                        BlendOp::Subtract => {
+                            gl::BlendEquation(gl::FUNC_SUBTRACT); ck();
+                        }
+                    }
                     gl::Enable(gl::BLEND); ck();
                 }
             }
@@ -153,8 +161,18 @@ impl GLDevice {
     fn set_uniform(&self, uniform: &GLUniform, data: &UniformData) {
         unsafe {
             match *data {
+                UniformData::Float(value) => {
+                    gl::Uniform1f(uniform.location, value); ck();
+                }
                 UniformData::Int(value) => {
                     gl::Uniform1i(uniform.location, value); ck();
+                }
+                UniformData::Mat2(data) => {
+                    assert_eq!(mem::size_of::<F32x4>(), 4 * 4);
+                    gl::UniformMatrix2fv(uniform.location,
+                                         1,
+                                         gl::FALSE,
+                                         &data as *const F32x4 as *const GLfloat);
                 }
                 UniformData::Mat4(data) => {
                     assert_eq!(mem::size_of::<[F32x4; 4]>(), 4 * 4 * 4);
@@ -188,13 +206,8 @@ impl GLDevice {
 
     fn reset_render_options(&self, render_options: &RenderOptions) {
         unsafe {
-            match render_options.blend {
-                BlendState::Off => {}
-                BlendState::RGBOneAlphaOneMinusSrcAlpha |
-                BlendState::RGBOneAlphaOne |
-                BlendState::RGBSrcAlphaAlphaOneMinusSrcAlpha => {
-                    gl::Disable(gl::BLEND); ck();
-                }
+            if render_options.blend.is_some() {
+                gl::Disable(gl::BLEND); ck();
             }
 
             if render_options.depth.is_some() {
@@ -242,22 +255,22 @@ impl Device for GLDevice {
         texture
     }
 
-    fn create_texture_from_data(&self, size: Vector2I, data: &[u8]) -> GLTexture {
-        assert!(data.len() >= size.x() as usize * size.y() as usize);
-
+    fn create_texture_from_data(&self, format: TextureFormat, size: Vector2I, data: TextureDataRef)
+                                -> GLTexture {
+        let data_ptr = data.check_and_extract_data_ptr(size, format);
         let mut texture = GLTexture { gl_texture: 0, size, format: TextureFormat::R8 };
         unsafe {
             gl::GenTextures(1, &mut texture.gl_texture); ck();
             self.bind_texture(&texture, 0);
             gl::TexImage2D(gl::TEXTURE_2D,
                            0,
-                           gl::R8 as GLint,
+                           format.gl_internal_format(),
                            size.x() as GLsizei,
                            size.y() as GLsizei,
                            0,
-                           gl::RED,
-                           gl::UNSIGNED_BYTE,
-                           data.as_ptr() as *const GLvoid); ck();
+                           format.gl_format(),
+                           format.gl_type(),
+                           data_ptr)
         }
 
         self.set_texture_parameters(&texture);
@@ -459,19 +472,37 @@ impl Device for GLDevice {
         texture.size
     }
 
-    fn upload_to_texture(&self, texture: &Self::Texture, size: Vector2I, data: &[u8]) {
-        assert!(data.len() >= size.x() as usize * size.y() as usize * 4);
+    fn upload_to_texture(&self, texture: &Self::Texture, rect: RectI, data: TextureDataRef) {
+        let data_ptr = data.check_and_extract_data_ptr(rect.size(), texture.format);
+
+        assert!(rect.size().x() >= 0);
+        assert!(rect.size().y() >= 0);
+        assert!(rect.max_x() <= texture.size.x());
+        assert!(rect.max_y() <= texture.size.y());
+
         unsafe {
             self.bind_texture(texture, 0);
-            gl::TexImage2D(gl::TEXTURE_2D,
-                           0,
-                           gl::RGBA as GLint,
-                           size.x() as GLsizei,
-                           size.y() as GLsizei,
-                           0,
-                           gl::RGBA,
-                           gl::UNSIGNED_BYTE,
-                           data.as_ptr() as *const GLvoid); ck();
+            if rect.origin() == Vector2I::default() && rect.size() == texture.size {
+                gl::TexImage2D(gl::TEXTURE_2D,
+                               0,
+                               texture.format.gl_internal_format(),
+                               texture.size.x() as GLsizei,
+                               texture.size.y() as GLsizei,
+                               0,
+                               texture.format.gl_format(),
+                               texture.format.gl_type(),
+                               data_ptr); ck();
+            } else {
+                gl::TexSubImage2D(gl::TEXTURE_2D,
+                                  0,
+                                  rect.origin().x(),
+                                  rect.origin().y(),
+                                  rect.size().x() as GLsizei,
+                                  rect.size().y() as GLsizei,
+                                  texture.format.gl_format(),
+                                  texture.format.gl_type(),
+                                  data_ptr); ck();
+            }
         }
 
         self.set_texture_parameters(texture);
@@ -498,8 +529,10 @@ impl Device for GLDevice {
                 flip_y(&mut pixels, size, channels);
                 TextureData::U8(pixels)
             }
-            TextureFormat::R16F => {
-                let mut pixels = vec![0; size.x() as usize * size.y() as usize];
+            TextureFormat::R16F | TextureFormat::RGBA16F => {
+                let channels = format.channels();
+                let mut pixels =
+                    vec![f16::default(); size.x() as usize * size.y() as usize * channels];
                 unsafe {
                     gl::ReadPixels(origin.x(),
                                    origin.y(),
@@ -509,8 +542,23 @@ impl Device for GLDevice {
                                    format.gl_type(),
                                    pixels.as_mut_ptr() as *mut GLvoid); ck();
                 }
-                flip_y(&mut pixels, size, 1);
-                TextureData::U16(pixels)
+                flip_y(&mut pixels, size, channels);
+                TextureData::F16(pixels)
+            }
+            TextureFormat::RGBA32F => {
+                let channels = format.channels();
+                let mut pixels = vec![0.0; size.x() as usize * size.y() as usize * channels];
+                unsafe {
+                    gl::ReadPixels(origin.x(),
+                                   origin.y(),
+                                   size.x() as GLsizei,
+                                   size.y() as GLsizei,
+                                   format.gl_format(),
+                                   format.gl_type(),
+                                   pixels.as_mut_ptr() as *mut GLvoid); ck();
+                }
+                flip_y(&mut pixels, size, channels);
+                TextureData::F32(pixels)
             }
         }
     }
@@ -945,20 +993,23 @@ impl TextureFormatExt for TextureFormat {
             TextureFormat::R8 => gl::R8 as GLint,
             TextureFormat::R16F => gl::R16F as GLint,
             TextureFormat::RGBA8 => gl::RGBA as GLint,
+            TextureFormat::RGBA16F => gl::RGBA16F as GLint,
+            TextureFormat::RGBA32F => gl::RGBA32F as GLint,
         }
     }
 
     fn gl_format(self) -> GLuint {
         match self {
             TextureFormat::R8 | TextureFormat::R16F => gl::RED,
-            TextureFormat::RGBA8 => gl::RGBA,
+            TextureFormat::RGBA8 | TextureFormat::RGBA16F | TextureFormat::RGBA32F => gl::RGBA,
         }
     }
 
     fn gl_type(self) -> GLuint {
         match self {
             TextureFormat::R8 | TextureFormat::RGBA8 => gl::UNSIGNED_BYTE,
-            TextureFormat::R16F => gl::HALF_FLOAT,
+            TextureFormat::R16F | TextureFormat::RGBA16F => gl::HALF_FLOAT,
+            TextureFormat::RGBA32F => gl::FLOAT,
         }
     }
 }

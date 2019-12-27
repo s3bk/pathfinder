@@ -10,7 +10,7 @@
 
 //! 3D transforms that can be applied to paths.
 
-use crate::vector::{Vector2F, Vector2I, Vector4F};
+use crate::vector::{Vector2F, Vector2I, Vector3F, Vector4F};
 use crate::rect::RectF;
 use crate::transform2d::Matrix2x2F;
 use pathfinder_simd::default::F32x4;
@@ -201,6 +201,25 @@ impl Transform4F {
         )
     }
 
+    /// Just like `gluLookAt()`.
+    #[inline]
+    pub fn looking_at(eye: Vector3F, center: Vector3F, mut up: Vector3F) -> Transform4F {
+        let f = (center - eye).normalize();
+        up = up.normalize();
+        let s = f.cross(up);
+        let u = s.normalize().cross(f);
+        let minus_f = -f;
+
+        // TODO(pcwalton): Use SIMD. This needs a matrix transpose:
+        // https://fgiesen.wordpress.com/2013/07/09/simd-transposes-1/
+        let transform = Transform4F::row_major(s.x(),       s.y(),       s.z(),       0.0,
+                                               u.x(),       u.y(),       u.z(),       0.0,
+                                               minus_f.x(), minus_f.y(), minus_f.z(), 0.0,
+                                               0.0,         0.0,         0.0,         1.0) *
+                        Transform4F::from_translation((-eye).to_4d());
+        transform
+    }
+
     //     +-     -+
     //     |  A B  |
     //     |  C D  |
@@ -387,8 +406,7 @@ impl Mul<Vector2F> for Perspective {
     type Output = Vector2F;
     #[inline]
     fn mul(self, vector: Vector2F) -> Vector2F {
-        let point = (self.transform * vector.to_3d()).perspective_divide().to_2d() *
-            Vector2F::new(1.0, -1.0);
+        let point = (self.transform * vector.to_4d()).to_2d() * Vector2F::new(1.0, -1.0);
         (point + Vector2F::splat(1.0)) * self.window_size.to_f32().scale(0.5)
     }
 }

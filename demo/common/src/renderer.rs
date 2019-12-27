@@ -163,7 +163,7 @@ impl<W> DemoApp<W> where W: Window {
         let scene_framebuffer = self.scene_framebuffer.as_ref().unwrap();
         let scene_texture = self.renderer.device.framebuffer_texture(scene_framebuffer);
 
-        let mut quad_scale = self.scene_metadata.view_box.size().to_3d();
+        let mut quad_scale = self.scene_metadata.view_box.size().to_4d();
         quad_scale.set_z(1.0);
         let quad_scale_transform = Transform4F::from_scale(quad_scale);
 
@@ -210,7 +210,7 @@ impl<W> DemoApp<W> where W: Window {
 
         let ground_scale = self.scene_metadata.view_box.max_x() * 2.0;
 
-        let mut offset = self.scene_metadata.view_box.lower_right().to_3d();
+        let mut offset = self.scene_metadata.view_box.lower_right().to_4d();
         offset.set_z(ground_scale);
         offset = offset * Vector4F::new(-0.5, 1.0, -0.5, 1.0);
         let base_transform = perspective.transform * Transform4F::from_translation(offset);
@@ -298,7 +298,7 @@ impl<W> DemoApp<W> where W: Window {
         let viewport = RectI::new(Vector2I::default(), drawable_size);
         let pixels = match self.renderer.device.read_pixels(&RenderTarget::Default, viewport) {
             TextureData::U8(pixels) => pixels,
-            TextureData::U16(_) => panic!("Unexpected pixel format for default framebuffer!"),
+            _ => panic!("Unexpected pixel format for default framebuffer!"),
         };
         image::save_buffer(
             path,

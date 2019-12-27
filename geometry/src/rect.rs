@@ -128,6 +128,11 @@ impl RectF {
     }
 
     #[inline]
+    pub fn scale(self, factor: f32) -> RectF {
+        RectF(self.0 * F32x4::splat(factor))
+    }
+
+    #[inline]
     pub fn scale_xy(self, factors: Vector2F) -> RectF {
         RectF(self.0 * factors.0.concat_xy_xy(factors.0))
     }
@@ -185,6 +190,16 @@ impl RectI {
     #[inline]
     pub fn lower_right(&self) -> Vector2I {
         Vector2I(self.0.zw())
+    }
+
+    #[inline]
+    pub fn scale(self, factor: i32) -> RectI {
+        RectI(self.0 * I32x4::splat(factor))
+    }
+
+    #[inline]
+    pub fn scale_xy(self, factors: Vector2I) -> RectI {
+        RectI(self.0 * factors.0.concat_xy_xy(factors.0))
     }
 
     #[inline]
