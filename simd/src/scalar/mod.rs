@@ -71,11 +71,6 @@ impl F32x2 {
     }
 
     #[inline]
-    pub fn round(self) -> F32x2 {
-        F32x2([self[0].round(), self[1].round()])
-    }
-
-    #[inline]
     pub fn sqrt(self) -> F32x2 {
         F32x2([self[0].sqrt(), self[1].sqrt()])
     }
@@ -121,14 +116,16 @@ impl F32x2 {
         F32x4([self[0] as f32, self[1] as f32, 0.0, 0.0])
     }
 
+    /// Converts these packed floats to integers via rounding.
     #[inline]
     pub fn to_i32x2(self) -> I32x2 {
-        I32x2([self[0] as i32, self[1] as i32])
+        I32x2([self[0].round() as i32, self[1].round() as i32])
     }
 
+    /// Converts these packed floats to integers via rounding.
     #[inline]
     pub fn to_i32x4(self) -> I32x4 {
-        I32x4([self[0] as i32, self[1] as i32, 0, 0])
+        I32x4([self[0].round() as i32, self[1].round() as i32, 0, 0])
     }
 
     // Swizzle
@@ -259,16 +256,6 @@ impl F32x4 {
     }
 
     #[inline]
-    pub fn round(self) -> F32x4 {
-        F32x4([
-            self[0].round(),
-            self[1].round(),
-            self[2].round(),
-            self[3].round(),
-        ])
-    }
-
-    #[inline]
     pub fn sqrt(self) -> F32x4 {
         F32x4([
             self[0].sqrt(),
@@ -320,14 +307,14 @@ impl F32x4 {
         ])
     }
 
-    // Converts these packed floats to integers.
+    /// Converts these packed floats to integers via rounding.
     #[inline]
     pub fn to_i32x4(self) -> I32x4 {
         I32x4([
-            self[0] as i32,
-            self[1] as i32,
-            self[2] as i32,
-            self[3] as i32,
+            self[0].round() as i32,
+            self[1].round() as i32,
+            self[2].round() as i32,
+            self[3].round() as i32,
         ])
     }
 
@@ -609,6 +596,16 @@ impl I32x4 {
             self[3] as f32,
         ])
     }
+
+    /// Converts these packed signed integers to unsigned integers.
+    ///
+    /// Overflowing values will wrap around.
+    ///
+    /// FIXME(pcwalton): Should they? This will assert on overflow in debug.
+    #[inline]
+    pub fn to_u32x4(self) -> U32x4 {
+        U32x4([self[0] as u32, self[1] as u32, self[2] as u32, self[3] as u32])
+    }
 }
 
 impl Index<usize> for I32x4 {
@@ -700,13 +697,21 @@ impl Shr<I32x4> for I32x4 {
 pub struct U32x2(pub [u32; 2]);
 
 impl U32x2 {
+    /// Returns true if both booleans in this vector are true.
+    ///
+    /// The result is *undefined* if both values in this vector are not booleans. A boolean is a
+    /// value with all bits set or all bits clear (i.e. !0 or 0).
     #[inline]
-    pub fn is_all_ones(&self) -> bool {
+    pub fn all_true(&self) -> bool {
         self[0] == !0 && self[1] == !0
     }
 
+    /// Returns true if both booleans in this vector are false.
+    ///
+    /// The result is *undefined* if both values in this vector are not booleans. A boolean is a
+    /// value with all bits set or all bits clear (i.e. !0 or 0).
     #[inline]
-    pub fn is_all_zeroes(&self) -> bool {
+    pub fn all_false(&self) -> bool {
         self[0] == 0 && self[1] == 0
     }
 }
@@ -725,13 +730,35 @@ impl Index<usize> for U32x2 {
 pub struct U32x4(pub [u32; 4]);
 
 impl U32x4 {
+    // Conversions
+
+    /// Converts these packed unsigned integers to signed integers.
+    ///
+    /// Overflowing values will wrap around.
+    ///
+    /// FIXME(pcwalton): Should they? This will assert on overflow in debug.
     #[inline]
-    pub fn is_all_ones(&self) -> bool {
+    pub fn to_u32x4(self) -> I32x4 {
+        I32x4([self[0] as i32, self[1] as i32, self[2] as i32, self[3] as i32])
+    }
+
+    // Basic operations
+
+    /// Returns true if all four booleans in this vector are true.
+    ///
+    /// The result is *undefined* if all four values in this vector are not booleans. A boolean is
+    /// a value with all bits set or all bits clear (i.e. !0 or 0).
+    #[inline]
+    pub fn all_true(&self) -> bool {
         self[0] == !0 && self[1] == !0 && self[2] == !0 && self[3] == !0
     }
 
+    /// Returns true if all four booleans in this vector are false.
+    ///
+    /// The result is *undefined* if all four values in this vector are not booleans. A boolean is
+    /// a value with all bits set or all bits clear (i.e. !0 or 0).
     #[inline]
-    pub fn is_all_zeroes(&self) -> bool {
+    pub fn all_false(&self) -> bool {
         self[0] == 0 && self[1] == 0 && self[2] == 0 && self[3] == 0
     }
 }
@@ -741,5 +768,13 @@ impl Index<usize> for U32x4 {
     #[inline]
     fn index(&self, index: usize) -> &u32 {
         &self.0[index]
+    }
+}
+
+impl Shr<u32> for U32x4 {
+    type Output = U32x4;
+    #[inline]
+    fn shr(self, amount: u32) -> U32x4 {
+        U32x4([self[0] >> amount, self[1] >> amount, self[2] >> amount, self[3] >> amount])
     }
 }

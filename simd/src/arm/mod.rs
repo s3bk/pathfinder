@@ -74,11 +74,6 @@ impl F32x2 {
     }
 
     #[inline]
-    pub fn round(self) -> F32x2 {
-        unsafe { F32x2(round_v2f32(self.0)) }
-    }
-
-    #[inline]
     pub fn sqrt(self) -> F32x2 {
         unsafe { F32x2(sqrt_v2f32(self.0)) }
     }
@@ -112,9 +107,10 @@ impl F32x2 {
         self.concat_xy_xy(F32x2::default())
     }
 
+    /// Converts these packed floats to integers via rounding.
     #[inline]
     pub fn to_i32x2(self) -> I32x2 {
-        unsafe { I32x2(simd_cast(self.0)) }
+        unsafe { I32x2(simd_cast(round_v2f32(self.0))) }
     }
 
     #[inline]
@@ -253,11 +249,6 @@ impl F32x4 {
     }
 
     #[inline]
-    pub fn round(self) -> F32x4 {
-        unsafe { F32x4(round_v4f32(self.0)) }
-    }
-
-    #[inline]
     pub fn sqrt(self) -> F32x4 {
         unsafe { F32x4(sqrt_v4f32(self.0)) }
     }
@@ -330,10 +321,10 @@ impl F32x4 {
 
     // Conversions
 
-    // Converts these packed floats to integers.
+    /// Converts these packed floats to integers via rounding.
     #[inline]
     pub fn to_i32x4(self) -> I32x4 {
-        unsafe { I32x4(simd_cast(self.0)) }
+        unsafe { I32x4(round_v4f32(simd_cast(self.0))) }
     }
 }
 
@@ -377,7 +368,7 @@ impl Debug for F32x4 {
 impl PartialEq for F32x4 {
     #[inline]
     fn eq(&self, other: &F32x4) -> bool {
-        self.packed_eq(*other).is_all_ones()
+        self.packed_eq(*other).all_true()
     }
 }
 
@@ -452,7 +443,7 @@ impl Default for I32x2 {
 impl PartialEq for I32x2 {
     #[inline]
     fn eq(&self, other: &I32x2) -> bool {
-        self.packed_eq(*other).is_all_ones()
+        self.packed_eq(*other).all_true()
     }
 }
 
@@ -636,7 +627,7 @@ impl Mul<I32x4> for I32x4 {
 impl PartialEq for I32x4 {
     #[inline]
     fn eq(&self, other: &I32x4) -> bool {
-        self.packed_eq(*other).is_all_ones()
+        self.packed_eq(*other).all_true()
     }
 }
 
@@ -670,13 +661,21 @@ impl Shr<I32x4> for I32x4 {
 pub struct U32x2(pub uint32x2_t);
 
 impl U32x2 {
+    /// Returns true if both booleans in this vector are true.
+    ///
+    /// The result is *undefined* if both values in this vector are not booleans. A boolean is a
+    /// value with all bits set or all bits clear (i.e. !0 or 0).
     #[inline]
-    pub fn is_all_ones(&self) -> bool {
+    pub fn all_true(&self) -> bool {
         unsafe { aarch64::vminv_u32(self.0) == !0 }
     }
 
+    /// Returns true if both booleans in this vector are false.
+    ///
+    /// The result is *undefined* if both values in this vector are not booleans. A boolean is a
+    /// value with all bits set or all bits clear (i.e. !0 or 0).
     #[inline]
-    pub fn is_all_zeroes(&self) -> bool {
+    pub fn all_false(&self) -> bool {
         unsafe { aarch64::vmaxv_u32(self.0) == 0 }
     }
 }
@@ -699,13 +698,21 @@ impl Index<usize> for U32x2 {
 pub struct U32x4(pub uint32x4_t);
 
 impl U32x4 {
+    /// Returns true if all four booleans in this vector are true.
+    ///
+    /// The result is *undefined* if all four values in this vector are not booleans. A boolean is
+    /// a value with all bits set or all bits clear (i.e. !0 or 0).
     #[inline]
-    pub fn is_all_ones(&self) -> bool {
+    pub fn all_true(&self) -> bool {
         unsafe { aarch64::vminvq_u32(self.0) == !0 }
     }
 
+    /// Returns true if all four booleans in this vector are false.
+    ///
+    /// The result is *undefined* if all four values in this vector are not booleans. A boolean is
+    /// a value with all bits set or all bits clear (i.e. !0 or 0).
     #[inline]
-    pub fn is_all_zeroes(&self) -> bool {
+    pub fn all_false(&self) -> bool {
         unsafe { aarch64::vmaxvq_u32(self.0) == 0 }
     }
 }

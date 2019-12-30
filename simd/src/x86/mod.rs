@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::arch::x86_64::{self, __m128, __m128i, _MM_FROUND_TO_NEAREST_INT};
+use std::arch::x86_64::{self, __m128, __m128i};
 use std::cmp::PartialEq;
 use std::fmt::{self, Debug, Formatter};
 use std::mem;
@@ -74,11 +74,6 @@ impl F32x2 {
     #[inline]
     pub fn ceil(self) -> F32x2 {
         self.to_f32x4().ceil().xy()
-    }
-
-    #[inline]
-    pub fn round(self) -> F32x2 {
-        self.to_f32x4().round().xy()
     }
 
     #[inline]
@@ -172,7 +167,7 @@ impl Debug for F32x2 {
 impl PartialEq for F32x2 {
     #[inline]
     fn eq(&self, other: &F32x2) -> bool {
-        self.packed_eq(*other).is_all_ones()
+        self.packed_eq(*other).all_true()
     }
 }
 
@@ -262,11 +257,6 @@ impl F32x4 {
     }
 
     #[inline]
-    pub fn round(self) -> F32x4 {
-        unsafe { F32x4(x86_64::_mm_round_ps(self.0, _MM_FROUND_TO_NEAREST_INT)) }
-    }
-
-    #[inline]
     pub fn sqrt(self) -> F32x4 {
         unsafe { F32x4(x86_64::_mm_sqrt_ps(self.0)) }
     }
@@ -303,7 +293,7 @@ impl F32x4 {
 
     // Conversions
 
-    /// Converts these packed floats to integers.
+    /// Converts these packed floats to integers via rounding.
     #[inline]
     pub fn to_i32x4(self) -> I32x4 {
         unsafe { I32x4(x86_64::_mm_cvtps_epi32(self.0)) }
@@ -406,7 +396,7 @@ impl Debug for F32x4 {
 impl PartialEq for F32x4 {
     #[inline]
     fn eq(&self, other: &F32x4) -> bool {
-        self.packed_eq(*other).is_all_ones()
+        self.packed_eq(*other).all_true()
     }
 }
 
@@ -563,7 +553,7 @@ impl Debug for I32x2 {
 impl PartialEq for I32x2 {
     #[inline]
     fn eq(&self, other: &I32x2) -> bool {
-        self.packed_eq(*other).is_all_ones()
+        self.packed_eq(*other).all_true()
     }
 }
 
@@ -633,6 +623,14 @@ impl I32x4 {
     #[inline]
     pub fn to_f32x4(self) -> F32x4 {
         unsafe { F32x4(x86_64::_mm_cvtepi32_ps(self.0)) }
+    }
+
+    /// Converts these packed signed integers to unsigned integers.
+    ///
+    /// Overflowing values will wrap around.
+    #[inline]
+    pub fn to_u32x4(self) -> U32x4 {
+        U32x4(self.0)
     }
 
     // Basic operations
@@ -724,14 +722,6 @@ impl BitOr<I32x4> for I32x4 {
     }
 }
 
-impl Shr<I32x4> for I32x4 {
-    type Output = I32x4;
-    #[inline]
-    fn shr(self, other: I32x4) -> I32x4 {
-        unsafe { I32x4(x86_64::_mm_srlv_epi32(self.0, other.0)) }
-    }
-}
-
 impl Debug for I32x4 {
     #[inline]
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
@@ -742,7 +732,7 @@ impl Debug for I32x4 {
 impl PartialEq for I32x4 {
     #[inline]
     fn eq(&self, other: &I32x4) -> bool {
-        self.packed_eq(*other).is_all_ones()
+        self.packed_eq(*other).all_true()
     }
 }
 
@@ -752,13 +742,21 @@ impl PartialEq for I32x4 {
 pub struct U32x2(pub u64);
 
 impl U32x2 {
+    /// Returns true if both booleans in this vector are true.
+    ///
+    /// The result is *undefined* if both values in this vector are not booleans. A boolean is a
+    /// value with all bits set or all bits clear (i.e. !0 or 0).
     #[inline]
-    pub fn is_all_ones(self) -> bool {
+    pub fn all_true(self) -> bool {
         self.0 == !0
     }
 
+    /// Returns true if both booleans in this vector are false.
+    ///
+    /// The result is *undefined* if both values in this vector are not booleans. A boolean is a
+    /// value with all bits set or all bits clear (i.e. !0 or 0).
     #[inline]
-    pub fn is_all_zeroes(self) -> bool {
+    pub fn all_false(self) -> bool {
         self.0 == 0
     }
 }
@@ -784,16 +782,34 @@ impl U32x4 {
         unsafe { U32x4(x86_64::_mm_set1_epi32(x as i32)) }
     }
 
-    // Basic operations
+    // Conversions
 
+    /// Converts these packed unsigned integers to signed integers.
+    ///
+    /// Overflowing values will wrap around.
     #[inline]
-    pub fn is_all_ones(self) -> bool {
-        unsafe { x86_64::_mm_test_all_ones(self.0) != 0 }
+    pub fn to_i32x4(self) -> I32x4 {
+        I32x4(self.0)
     }
 
+    // Basic operations
+
+    /// Returns true if all four booleans in this vector are true.
+    ///
+    /// The result is *undefined* if all four values in this vector are not booleans. A boolean is
+    /// a value with all bits set or all bits clear (i.e. !0 or 0).
     #[inline]
-    pub fn is_all_zeroes(self) -> bool {
-        unsafe { x86_64::_mm_test_all_zeros(self.0, self.0) != 0 }
+    pub fn all_true(self) -> bool {
+        unsafe { x86_64::_mm_movemask_ps(x86_64::_mm_castsi128_ps(self.0)) == 0x0f }
+    }
+
+    /// Returns true if all four booleans in this vector are false.
+    ///
+    /// The result is *undefined* if all four values in this vector are not booleans. A boolean is
+    /// a value with all bits set or all bits clear (i.e. !0 or 0).
+    #[inline]
+    pub fn all_false(self) -> bool {
+        unsafe { x86_64::_mm_movemask_ps(x86_64::_mm_castsi128_ps(self.0)) == 0x00 }
     }
 
     // Extraction
@@ -829,7 +845,7 @@ impl Index<usize> for U32x4 {
 impl PartialEq for U32x4 {
     #[inline]
     fn eq(&self, other: &U32x4) -> bool {
-        self.packed_eq(*other).is_all_ones()
+        self.packed_eq(*other).all_true()
     }
 }
 
@@ -846,5 +862,13 @@ impl BitXor<U32x4> for U32x4 {
     #[inline]
     fn bitxor(self, other: U32x4) -> U32x4 {
         unsafe { U32x4(x86_64::_mm_xor_si128(self.0, other.0)) }
+    }
+}
+
+impl Shr<u32> for U32x4 {
+    type Output = U32x4;
+    #[inline]
+    fn shr(self, amount: u32) -> U32x4 {
+        unsafe { U32x4(x86_64::_mm_srl_epi32(self.0, U32x4::new(amount, 0, 0, 0).0)) }
     }
 }
