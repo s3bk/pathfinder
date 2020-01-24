@@ -24,9 +24,9 @@ use wasm_bindgen::JsCast;
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::vector::Vector2I;
 use pathfinder_gpu::resources::ResourceLoader;
-use pathfinder_gpu::{RenderTarget, BlendState, BufferData, BufferTarget, BufferUploadMode};
+use pathfinder_gpu::{RenderTarget, BlendState, BlendFunc, BlendOp, BufferData, BufferTarget, BufferUploadMode};
 use pathfinder_gpu::{ClearOps, DepthFunc, Device, Primitive, RenderOptions, RenderState};
-use pathfinder_gpu::{ShaderKind, StencilFunc, TextureData, TextureFormat, UniformData};
+use pathfinder_gpu::{ShaderKind, StencilFunc, TextureData, TextureDataRef, TextureFormat, UniformData};
 use pathfinder_gpu::{VertexAttrClass, VertexAttrDescriptor, VertexAttrType};
 use pathfinder_simd::default::F32x4;
 use std::ffi::CString;
@@ -35,10 +35,10 @@ use std::ptr;
 use std::str;
 use std::time::Duration;
 
-pub struct WebGLDevice {
+pub struct WebGlDevice {
     context: web_sys::WebGl2RenderingContext
 }
-impl WebGLDevice {
+impl WebGlDevice {
     // Error checking
     
     #[cfg(debug_assertions)]
@@ -53,8 +53,6 @@ impl WebGLDevice {
                 WebGl::INVALID_OPERATION => "INVALID_OPERATION",
                 WebGl::INVALID_FRAMEBUFFER_OPERATION => "INVALID_FRAMEBUFFER_OPERATION",
                 WebGl::OUT_OF_MEMORY => "OUT_OF_MEMORY",
-                WebGl::STACK_UNDERFLOW => "STACK_UNDERFLOW",
-                WebGl::STACK_OVERFLOW => "STACK_OVERFLOW",
                 _ => "Unknown"
             });
         }
@@ -64,50 +62,125 @@ impl WebGLDevice {
     }
     
     #[cfg(not(debug_assertions))]
+    #[inline]
     fn ck(&self) {}
     
+    #[inline]
     fn set_texture_parameters(&self, texture: &WebGlTexture) {
         self.bind_texture(texture, 0);
         unsafe {
-            self.context.tex_parameter_i32(
+            self.context.tex_parameteri(
                 WebGl::TEXTURE_2D,
                 WebGl::TEXTURE_MIN_FILTER,
                 WebGl::LINEAR as i32,
             );
-            self.context.tex_parameter_i32(
+            self.context.tex_parameteri(
                 WebGl::TEXTURE_2D,
                 WebGl::TEXTURE_MAG_FILTER,
                 WebGl::LINEAR as i32,
             );
-            self.context.tex_parameter_i32(
+            self.context.tex_parameteri(
                 WebGl::TEXTURE_2D,
                 WebGl::TEXTURE_WRAP_S,
                 WebGl::CLAMP_TO_EDGE as i32,
             );
-            self.context.tex_parameter_i32(
+            self.context.tex_parameteri(
                 WebGl::TEXTURE_2D,
                 WebGl::TEXTURE_WRAP_T,
                 WebGl::CLAMP_TO_EDGE as i32,
             );
         }
     }
+    #[inline]
     fn bind_texture(&self, texture: &WebGlTexture, unit: u32) {
         self.context.active_texture(WebGl::TEXTURE0 + unit);
-        self.context.bind_texture(WebGl::TEXTURE_2D, Some(texture.gl_texture));
+        self.context.bind_texture(WebGl::TEXTURE_2D, Some(&texture.texture));
     }
+    #[inline]
     fn unbind_texture(&self, unit: u32) {
         self.context.active_texture(WebGl::TEXTURE0 + unit);
         self.context.bind_texture(WebGl::TEXTURE_2D, None);
     }
 
+    #[inline]
     fn bind_render_target(&self, attachment: &RenderTarget<WebGlDevice>) {
         let framebuffer = match *attachment {
             RenderTarget::Default => None,
             RenderTarget::Framebuffer(framebuffer) => Some(framebuffer),
-        }
-        self.context.bind_framebuffer(WebGl::FRAMEBUFFER, framebuffer);
+        };
+        self.context.bind_framebuffer(WebGl::FRAMEBUFFER, framebuffer.map(|f| &f.framebuffer));
     }
 
+    #[inline]
+    fn bind_vertex_array(&self, vertex_array: &WebGlVertexArray) {
+        self.context.bind_vertex_array(Some(&vertex_array.gl_vertex_array));
+        self.ck();
+    }
+
+    #[inline]
+    fn unbind_vertex_array(&self) {
+        self.context.bind_vertex_array(None);
+        self.ck();
+    }
+    #[inline]
+    fn set_uniform(&self, uniform: &WebGlUniform, data: &UniformData) {
+        let location = Some(&uniform.location);
+
+        match *data {
+            UniformData::Float(value) => {
+                self.context.uniform1f(location, value);
+                self.ck();
+            }
+            UniformData::Int(value) => {
+                self.context.uniform1i(location, value);
+                self.ck();
+            }
+            UniformData::Mat2(data) => {
+                self.context.uniform_matrix2fv_with_f32_array(
+                    location,
+                    false,
+                    &[data.x(), data.y(), data.z(), data.w()],
+                );
+            }
+            UniformData::Mat4(data) => {
+                self.context.uniform_matrix4fv_with_f32_array(
+                    location,
+                    false,
+                    &[
+                        data[0].x(),
+                        data[0].y(),
+                        data[0].z(),
+                        data[0].w(),
+                        data[1].x(),
+                        data[1].y(),
+                        data[1].z(),
+                        data[1].w(),
+                        data[2].x(),
+                        data[2].y(),
+                        data[2].z(),
+                        data[2].w(),
+                        data[3].x(),
+                        data[3].y(),
+                        data[3].z(),
+                        data[3].w(),
+                    ],
+                );
+            }
+            UniformData::Vec2(data) => {
+                self.context.uniform2f(location, data.x(), data.y());
+                self.ck();
+            }
+            UniformData::Vec4(data) => {
+                self.context
+                    .uniform4f(location, data.x(), data.y(), data.z(), data.w());
+                self.ck();
+            }
+            UniformData::TextureUnit(unit) => {
+                self.context.uniform1i(location, unit as i32);
+                self.ck();
+            }
+        }
+    }
     fn set_render_state(&self, render_state: &RenderState<WebGlDevice>) {
         self.bind_render_target(render_state.target);
 
@@ -118,8 +191,8 @@ impl WebGLDevice {
             self.clear(&render_state.options.clear_ops);
         }
 
-        self.use_program(render_state.program);
-        self.bind_vertex_array(render_state.vertex_array);
+        self.context.use_program(Some(&render_state.program.gl_program));
+        self.context.bind_vertex_array(Some(&render_state.vertex_array.gl_vertex_array));
         for (texture_unit, texture) in render_state.textures.iter().enumerate() {
             self.bind_texture(texture, texture_unit as u32);
         }
@@ -130,6 +203,125 @@ impl WebGLDevice {
         self.set_render_options(&render_state.options);
     }
 
+    fn set_render_options(&self, render_options: &RenderOptions) {
+        match render_options.blend {
+            None => {
+                self.context.disable(WebGl::BLEND);
+                self.ck();
+            }
+            Some(blend) => {
+                match blend.op {
+                    BlendOp::Add => self.context.blend_equation(WebGl::FUNC_ADD),
+                    BlendOp::Subtract => self.context.blend_equation(WebGl::FUNC_SUBTRACT),
+                }
+                self.ck();
+
+                match blend.func {
+                    BlendFunc::RGBOneAlphaOne => {
+                        self.context.blend_func(WebGl::ONE, WebGl::ONE);
+                    }
+                    BlendFunc::RGBOneAlphaOneMinusSrcAlpha => {
+                        self.context.blend_equation(WebGl::FUNC_ADD);
+                        self.context.blend_func_separate(
+                            WebGl::ONE,
+                            WebGl::ONE_MINUS_SRC_ALPHA,
+                            WebGl::ONE,
+                            WebGl::ONE,
+                        );
+                    }
+                    BlendFunc::RGBSrcAlphaAlphaOneMinusSrcAlpha => {
+                        self.context.blend_equation(WebGl::FUNC_ADD);
+                        self.context.blend_func_separate(
+                            WebGl::SRC_ALPHA,
+                            WebGl::ONE_MINUS_SRC_ALPHA,
+                            WebGl::ONE,
+                            WebGl::ONE,
+                        );
+                    }
+                }
+                self.context.enable(WebGl::BLEND);
+                self.ck();
+            }
+        }
+
+        // Set depth.
+        match render_options.depth {
+            None => {
+                self.context.disable(WebGl::DEPTH_TEST);
+                self.ck();
+            }
+            Some(ref state) => {
+                self.context.depth_func(state.func.to_gl_depth_func());
+                self.ck();
+                self.context.depth_mask(state.write as bool);
+                self.ck();
+                self.context.enable(WebGl::DEPTH_TEST);
+                self.ck();
+            }
+        }
+
+        // Set stencil.
+        match render_options.stencil {
+            None => {
+                self.context.disable(WebGl::STENCIL_TEST);
+                self.ck();
+            }
+            Some(ref state) => {
+                self.context.stencil_func(
+                    state.func.to_gl_stencil_func(),
+                    state.reference as i32,
+                    state.mask,
+                );
+                self.ck();
+                let (pass_action, write_mask) = if state.write {
+                    (WebGl::REPLACE, state.mask)
+                } else {
+                    (WebGl::KEEP, 0)
+                };
+                self.context.stencil_op(WebGl::KEEP, WebGl::KEEP, pass_action);
+                self.ck();
+                self.context.stencil_mask(write_mask);
+                self.context.enable(WebGl::STENCIL_TEST);
+                self.ck();
+            }
+        }
+
+        // Set color mask.
+        let color_mask = render_options.color_mask as bool;
+        self.context
+            .color_mask(color_mask, color_mask, color_mask, color_mask);
+        self.ck();
+    }
+
+    fn reset_render_state(&self, render_state: &RenderState<WebGlDevice>) {
+        self.reset_render_options(&render_state.options);
+        for texture_unit in 0..(render_state.textures.len() as u32) {
+            self.unbind_texture(texture_unit);
+        }
+        self.context.use_program(None);
+        self.unbind_vertex_array();
+    }
+
+    fn reset_render_options(&self, render_options: &RenderOptions) {
+        if render_options.blend.is_some() {
+            self.context.disable(WebGl::BLEND);
+        }
+
+        if render_options.depth.is_some() {
+            self.context.disable(WebGl::DEPTH_TEST);
+        }
+
+        if render_options.stencil.is_some() {
+            self.context.stencil_mask(!0);
+            self.context.disable(WebGl::STENCIL_TEST);
+        }
+
+        self.context.color_mask(true, true, true, true);
+        self.ck();
+    }
+
+    
+    #[inline]
     fn clear(&self, ops: &ClearOps) {
         let mut flags = 0;
         if let Some(color) = ops.color {
@@ -139,7 +331,7 @@ impl WebGLDevice {
         }
         if let Some(depth) = ops.depth {
             self.context.depth_mask(true);
-            self.context.clear_depth_f32(depth as _);
+            self.context.clear_depth(depth as _);
             flags |= WebGl::DEPTH_BUFFER_BIT;
         }
         if let Some(stencil) = ops.stencil {
@@ -151,64 +343,120 @@ impl WebGLDevice {
             self.context.clear(flags);
         }
     }
+
+    fn preprocess(&self, output: &mut Vec<u8>, source: &[u8], version: &str) {
+        let mut index = 0;
+        while index < source.len() {
+            if source[index..].starts_with(b"{{") {
+                let end_index = source[index..]
+                    .iter()
+                    .position(|character| *character == b'}')
+                    .expect("Expected `}`!")
+                    + index;
+                assert_eq!(source[end_index + 1], b'}');
+                let ident = String::from_utf8_lossy(&source[(index + 2)..end_index]);
+                if ident == "version" {
+                    output.extend_from_slice(version.as_bytes());
+                } else {
+                    panic!("unknown template variable: `{}`", ident);
+                }
+                index = end_index + 2;
+            } else {
+                output.push(source[index]);
+                index += 1;
+            }
+        }
+    }
 }
 
 fn slice_to_u8<T>(slice: &[T]) -> &[u8] {
-    std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * mem::size_of<T>())
+    unsafe {
+        std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * mem::size_of::<T>())
+    }
+}
+fn check_and_extract_data(data_ref: TextureDataRef, minimum_size: Vector2I, format: TextureFormat) -> &[u8] {
+    let channels = match (format, data_ref) {
+        (TextureFormat::R8, TextureDataRef::U8(_)) => 1,
+        (TextureFormat::RGBA8, TextureDataRef::U8(_)) => 4,
+        (TextureFormat::RGBA16F, TextureDataRef::F16(_)) => 4,
+        (TextureFormat::RGBA32F, TextureDataRef::F32(_)) => 4,
+        _ => panic!("Unimplemented texture format!"),
+    };
+
+    let area = minimum_size.x() as usize * minimum_size.y() as usize;
+
+    match data_ref {
+        TextureDataRef::U8(data) => {
+            assert!(data.len() >= area * channels);
+            slice_to_u8(data)
+        }
+        TextureDataRef::F16(data) => {
+            assert!(data.len() >= area * channels);
+            slice_to_u8(data)
+        }
+        TextureDataRef::F32(data) => {
+            assert!(data.len() >= area * channels);
+            slice_to_u8(data)
+        }
+    }
 }
 
-impl Device for WebGLDevice {
+impl Device for WebGlDevice {
     type Buffer = WebGlBuffer;
     type Framebuffer = WebGlFramebuffer;
     type Program = WebGlProgram;
     type Shader = WebGlShader;
     type Texture = WebGlTexture;
+    type TextureDataReceiver = ();
+
     type TimerQuery = WebGlTimerQuery;
     type Uniform = WebGlUniform;
     type VertexArray = WebGlVertexArray;
     type VertexAttr = WebGlVertexAttr;
 
     fn create_texture(&self, format: TextureFormat, size: Vector2I) -> WebGlTexture {
-        let texture = self.context.create_texture();
-        self.context.bind_texture(0, Some(&texture));
-        self.context.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
-            WebGLDevice::TEXTURE_2D,
-            0,
-            format.gl_internal_format(),
-            size.x(),
-            size.y(),
-            0,
-            format,
-            format.gl_type(),
-            None,
-        );
-
-        self.set_texture_parameters(&texture);
-        texture
-    }
-
-    fn create_texture_from_data(&self, size: Vector2I, data: &[u8]) -> WebGlTexture {
-        assert!(data.len() >= size.x() as usize * size.y() as usize);
-
-        let texture = self.context.create_texture();
+        let texture = self.context.create_texture().unwrap();
         self.context.bind_texture(0, Some(&texture));
         self.context.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
             WebGl::TEXTURE_2D,
             0,
-            WebGl::R8,
+            format.gl_internal_format() as i32,
             size.x(),
             size.y(),
             0,
-            WebGl::REED,
-            WebGl::UNSIGNED_BYTE,
-            Some(data),
+            format.gl_format(),
+            format.gl_type(),
+            None,
         );
 
+        let texture = WebGlTexture { texture, format, size, context: self.context.clone() };
         self.set_texture_parameters(&texture);
         texture
     }
 
-    fn create_shader_from_source(&self, name: &str, source: &[u8], kind: ShaderKind) -> GLShader {
+    fn create_texture_from_data(&self, format: TextureFormat, size: Vector2I, data_ref: TextureDataRef) -> WebGlTexture {
+        let data = check_and_extract_data(data_ref, size, format);
+
+        let texture = self.context.create_texture().unwrap();
+        self.context.bind_texture(0, Some(&texture));
+        self.context.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+            WebGl::TEXTURE_2D,
+            0,
+            format.gl_internal_format() as i32,
+            size.x(),
+            size.y(),
+            0,
+            format.gl_format(),
+            format.gl_type(),
+            Some(data),
+        );
+
+        let texture = WebGlTexture { texture, format, size, context: self.context.clone() };
+        self.set_texture_parameters(&texture);
+        texture
+    }
+
+    fn create_shader_from_source(&self, name: &str, source: &[u8], kind: ShaderKind) -> WebGlShader {
         let glsl_version_spec = "300 es";
 
         let mut output = vec![];
@@ -222,68 +470,72 @@ impl Device for WebGLDevice {
 
         let gl_shader = self.context.create_shader(gl_shader_kind).expect("could not create shader");
         self.context.compile_shader(&gl_shader);
-        let compile_status = self.context.get_shader_parameter(raw_shader, WebGl::COMPILE_STATUS)
+        let compile_status = self.context.get_shader_parameter(&gl_shader, WebGl::COMPILE_STATUS);
         if !compile_status.as_bool().unwrap_or(false) {
-            let info_log = self.context.get_shader_info_log(gl_shader).unwrap_or_default();
-            println!("Shader info log:\n{}", String::from_utf8_lossy(&info_log));
+            if let Some(info_log) = self.context.get_shader_info_log(&gl_shader) {
+                println!("Shader info log:\n{}", info_log);
+            }
             panic!("{:?} shader '{}' compilation failed", kind, name);
         }
 
-        GLShader {
-            context: self.context.clone(),
-            gl_shader
-        }
+        WebGlShader { gl_shader }
     }
 
     fn create_program_from_shaders(&self,
                                    _resources: &dyn ResourceLoader,
                                    name: &str,
-                                   vertex_shader: GLShader,
-                                   fragment_shader: GLShader)
-                                   -> GLProgram {
+                                   vertex_shader: WebGlShader,
+                                   fragment_shader: WebGlShader)
+                                   -> WebGlProgram {
         let gl_program = self.context.create_program().expect("unable to create program object");
-        self.context.attach_shader(gl_program, vertex_shader.gl_shader);
-        self.context.attach_shader(gl_program, fragment_shader.gl_shader);
-        self.context.link_program();
-        if !self.context.get_program_parameter(raw_program, WebGl::LINK_STATUS).as_bool().unwrap_or(false) {
-            let info_log = self.context.get_shader_info_log(gl_program).unwrap_or_default();
-            println!("Program info log:\n{}", String::from_utf8_lossy(&info_log));
+        self.context.attach_shader(&gl_program, &vertex_shader.gl_shader);
+        self.context.attach_shader(&gl_program, &fragment_shader.gl_shader);
+        self.context.link_program(&gl_program);
+        if !self.context.get_program_parameter(&gl_program, WebGl::LINK_STATUS).as_bool().unwrap_or(false) {
+            if let Some(info_log) = self.context.get_program_info_log(&gl_program) {
+                println!("Program info log:\n{}", info_log);
+            }
             panic!("Program {:?} linking failed", name);
         }
 
-        GLProgram { gl_program, vertex_shader, fragment_shader }
-    }
-
-    #[inline]
-    fn create_vertex_array(&self) -> WebGLVertexArray {
-        WebGLVertexArray {
+        WebGlProgram {
             context: self.context.clone(),
-            vertex_array: self.context.create_vertex_array.unwrap()
+            gl_program,
+            vertex_shader: vertex_shader.gl_shader,
+            fragment_shader: fragment_shader.gl_shader
         }
     }
 
-    fn get_vertex_attr(&self, program: &GLProgram, name: &str) -> Option<WebGLVertexAttr> {
+    #[inline]
+    fn create_vertex_array(&self) -> WebGlVertexArray {
+        WebGlVertexArray {
+            context: self.context.clone(),
+            gl_vertex_array: self.context.create_vertex_array().unwrap()
+        }
+    }
+
+    fn get_vertex_attr(&self, program: &WebGlProgram, name: &str) -> Option<WebGlVertexAttr> {
         let name = format!("a{}", name);
-        let attr = self.context.get_attrib_location(program.gl_program, &name);
+        let attr = self.context.get_attrib_location(&program.gl_program, &name);
         if attr < 0 {
             return None;
         }
         Some(WebGlVertexAttr { attr: attr as u32 })
     }
 
-    fn get_uniform(&self, program: &GLProgram, name: &str) -> WebGLUniform {
+    fn get_uniform(&self, program: &WebGlProgram, name: &str) -> WebGlUniform {
         let name = format!("u{}", name);
-        let location = self.context.get_uniform_location(program.gl_program, &name).unwrap();
-        WebGLUniform { location }
+        let location = self.context.get_uniform_location(&program.gl_program, &name).unwrap();
+        WebGlUniform { location }
     }
 
     fn configure_vertex_attr(&self,
-                             vertex_array: &WebGLVertexArray,
-                             attr: &WebGLVertexAttr,
+                             vertex_array: &WebGlVertexArray,
+                             attr: &WebGlVertexAttr,
                              descriptor: &VertexAttrDescriptor) {
         debug_assert_ne!(descriptor.stride, 0);
 
-        self.context.bind_vertex_array(vertex_array.gl_vertex_array);
+        self.context.bind_vertex_array(Some(&vertex_array.gl_vertex_array));
 
         let attr_type = descriptor.attr_type.to_gl_type();
         match descriptor.class {
@@ -299,7 +551,7 @@ impl Device for WebGLDevice {
                 );
             }
             VertexAttrClass::Int => {
-                self.context.vertex_attrib_pointer_with_i32(
+                self.context.vertex_attrib_i_pointer_with_i32(
                     attr.attr,
                     descriptor.size as i32,
                     attr_type,
@@ -307,40 +559,44 @@ impl Device for WebGLDevice {
                     descriptor.offset as i32
                 );
             }
-
-            self.contextvertex_attrib_divisor(attr.attr, descriptor.divisor); ck();
-            self.context.enable_vertex_attrib_array(attr.attr);
         }
 
+        self.context.vertex_attrib_divisor(attr.attr, descriptor.divisor);
+        self.context.enable_vertex_attrib_array(attr.attr);
         self.context.bind_vertex_array(None);
     }
 
-    fn create_framebuffer(&self, texture: GLTexture) -> WebGLFramebuffer {
+    fn create_framebuffer(&self, texture: WebGlTexture) -> WebGlFramebuffer {
         let gl_framebuffer = self.context.create_framebuffer().unwrap();
-        self.context.bind_framebuffer(WebGl::FRAMEBUFFER, Some(gl_framebuffer));
-        self.bind_texture(texture, 0);
+        self.context.bind_framebuffer(WebGl::FRAMEBUFFER, Some(&gl_framebuffer));
+        self.bind_texture(&texture, 0);
+
         self.context.framebuffer_texture_2d(
             WebGl::FRAMEBUFFER,
             WebGl::COLOR_ATTACHMENT0,
             WebGl::TEXTURE_2D,
-            Some(texture.gl_texture),
+            Some(&texture.texture),
             0
         );
         assert_eq!(
             self.context.check_framebuffer_status(WebGl::FRAMEBUFFER),
-            WebGl::FRAMEBUFFER_COMPLETE)
+            WebGl::FRAMEBUFFER_COMPLETE
         );
 
-        GLFramebuffer { context: self.context.clone(), gl_framebuffer, texture }
+        WebGlFramebuffer {
+            context: self.context.clone(),
+            framebuffer: gl_framebuffer,
+            texture
+        }
     }
 
-    fn create_buffer(&self) -> GLBuffer {
-        let gl_buffer = self.context.create_buffer().unwrap();
-        GLBuffer { gl_buffer }
+    fn create_buffer(&self) -> WebGlBuffer {
+        let buffer = self.context.create_buffer().unwrap();
+        WebGlBuffer { buffer, context: self.context.clone() }
     }
 
     fn allocate_buffer<T>(&self,
-                          buffer: &GLBuffer,
+                          buffer: &WebGlBuffer,
                           data: BufferData<T>,
                           target: BufferTarget,
                           mode: BufferUploadMode) {
@@ -348,13 +604,13 @@ impl Device for WebGLDevice {
             BufferTarget::Vertex => WebGl::ARRAY_BUFFER,
             BufferTarget::Index => WebGl::ELEMENT_ARRAY_BUFFER,
         };
-        self.context.bind_buffer(buffer.gl_buffer);
+        self.context.bind_buffer(target, Some(&buffer.buffer));
         let usage = mode.to_gl_usage();
-        let (ptr, len) = match data {
+        match data {
             BufferData::Uninitialized(len) =>
-                self.context.buffer_data_with_i32(target, len * mem::size_of<T>(), usage),
+                self.context.buffer_data_with_i32(target, (len * mem::size_of::<T>()) as i32, usage),
             BufferData::Memory(buffer) =>
-                self.context.buffer_data_u8_array(target, slice_to_u8(buffer), usage),
+                self.context.buffer_data_with_u8_array(target, slice_to_u8(buffer), usage),
         }
     }
 
@@ -368,26 +624,44 @@ impl Device for WebGLDevice {
         texture.size
     }
 
-    fn upload_to_texture(&self, texture: &Self::Texture, size: Vector2I, data: &[u8]) {
-        assert!(data.len() >= size.x() as usize * size.y() as usize * 4);
-        
+    fn upload_to_texture(&self, texture: &WebGlTexture, rect: RectI, data_ref: TextureDataRef) {
+        let data = check_and_extract_data(data_ref, rect.size(), texture.format);
+        assert!(rect.size().x() >= 0);
+        assert!(rect.size().y() >= 0);
+        assert!(rect.max_x() <= texture.size.x());
+        assert!(rect.max_y() <= texture.size.y());
+
         self.bind_texture(texture, 0);
-        self.context.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
-            WebGl::TEXTURE_2D,
-            0,
-            WebGl::RGBA as i32,
-            size.x() as i32,
-            size.y() as i32,
-            0,
-            WebGl::RGBA,
-            WebGl::UNSIGNED_BYTE,
-            Some(data)
-        );
+        if rect.origin() == Vector2I::default() && rect.size() == texture.size {
+            self.context.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+                WebGl::TEXTURE_2D,
+                0,
+                texture.format.gl_internal_format() as i32,
+                texture.size.x() as i32,
+                texture.size.y() as i32,
+                0,
+                texture.format.gl_format(),
+                texture.format.gl_type(),
+                Some(data)
+            );
+        } else {
+            self.context.tex_sub_image_2d_with_i32_and_i32_and_u32_and_type_and_opt_u8_array(
+                WebGl::TEXTURE_2D,
+                0,
+                rect.origin().x(),
+                rect.origin().y(),
+                texture.size.x() as i32,
+                texture.size.y() as i32,
+                texture.format.gl_format(),
+                texture.format.gl_type(),
+                Some(data)
+            );
+        }
 
         self.set_texture_parameters(texture);
     }
 
-    fn read_pixels(&self, render_target: &RenderTarget<GLDevice>, viewport: RectI) -> TextureData {
+    fn read_pixels(&self, render_target: &RenderTarget<WebGlDevice>, viewport: RectI) -> () {
         panic!("read_pixels is not supported");
     }
 
@@ -412,7 +686,7 @@ impl Device for WebGLDevice {
 
     fn draw_elements(&self, index_count: u32, render_state: &RenderState<Self>) {
         self.set_render_state(render_state);
-        self.context.draw_elements(
+        self.context.draw_elements_with_i32(
             render_state.primitive.to_gl_primitive(),
             index_count as i32,
             WebGl::UNSIGNED_INT,
@@ -426,9 +700,9 @@ impl Device for WebGLDevice {
                                instance_count: u32,
                                render_state: &RenderState<Self>) {
         self.set_render_state(render_state);
-        self.context.draw_elements_instanced(
+        self.context.draw_elements_instanced_with_i32(
             render_state.primitive.to_gl_primitive(),
-            index_count as GLsizei,
+            index_count as i32,
             WebGl::UNSIGNED_INT,
             0,
             instance_count as i32
@@ -437,9 +711,9 @@ impl Device for WebGLDevice {
     }
 
     #[inline]
-    fn create_timer_query(&self) -> GLTimerQuery {
+    fn create_timer_query(&self) -> WebGlTimerQuery {
         // FIXME use performance timers
-        GLTimerQuery {}
+        WebGlTimerQuery {}
     }
 
     #[inline]
@@ -453,15 +727,25 @@ impl Device for WebGLDevice {
     }
 
     #[inline]
-    fn get_timer_query(&self, query: &Self::TimerQuery) -> Option<Duration> {
-        // FIXME use performance timers
+    fn try_recv_timer_query(&self, query: &WebGlTimerQuery) -> Option<Duration> {
         None
     }
 
     #[inline]
-    fn bind_buffer(&self, vertex_array: &GLVertexArray, buffer: &GLBuffer, target: BufferTarget) {
+    fn recv_timer_query(&self, query: &WebGlTimerQuery) -> Duration {
+        unimplemented!()
+    }
+    fn try_recv_texture_data(&self, receiver: &Self::TextureDataReceiver) -> Option<TextureData> {
+        None
+    }
+    fn recv_texture_data(&self, receiver: &Self::TextureDataReceiver) -> TextureData {
+        unimplemented!()
+    }
+
+    #[inline]
+    fn bind_buffer(&self, vertex_array: &WebGlVertexArray, buffer: &WebGlBuffer, target: BufferTarget) {
         self.bind_vertex_array(vertex_array);
-        self.context.bind_buffer(target.to_gl_target(), buffer.gl_buffer);
+        self.context.bind_buffer(target.to_gl_target(), Some(&buffer.buffer));
         self.unbind_vertex_array();
     }
 
@@ -483,27 +767,27 @@ impl Device for WebGLDevice {
 
 pub struct WebGlVertexArray {
     context: web_sys::WebGl2RenderingContext,
-    pub vertex_array: web_sys::WebGlVertexArrayObject,
+    pub gl_vertex_array: web_sys::WebGlVertexArrayObject,
 }
 
 impl Drop for WebGlVertexArray {
     #[inline]
     fn drop(&mut self) {
-        self.context.delete_vertex_array(Some(&self.vertex_array));
+        self.context.delete_vertex_array(Some(&self.gl_vertex_array));
     }
 }
 
-pub struct WebGLVertexAttr {
+pub struct WebGlVertexAttr {
     attr: u32,
 }
 
-pub struct WebGlFrameBuffer {
+pub struct WebGlFramebuffer {
     context: web_sys::WebGl2RenderingContext,
-    pub framebuffer: web_sys::WebGlFrameBuffer,
-    pub texture: web_sys::WebGlTexture,
+    pub framebuffer: web_sys::WebGlFramebuffer,
+    pub texture: WebGlTexture,
 }
 
-impl Drop for WebGlFrameBuffer {
+impl Drop for WebGlFramebuffer {
     fn drop(&mut self) {
         self.context.delete_framebuffer(Some(&self.framebuffer));
     }
@@ -522,31 +806,24 @@ impl Drop for WebGlBuffer {
 
 #[derive(Debug)]
 pub struct WebGlUniform {
-    location: u32,
+    location: web_sys::WebGlUniformLocation,
 }
 
 pub struct WebGlProgram {
     context: web_sys::WebGl2RenderingContext,
-    pub program: web_sys::WebGlProgram,
+    pub gl_program: web_sys::WebGlProgram,
     vertex_shader: web_sys::WebGlShader,
     fragment_shader: web_sys::WebGlShader,
 }
 
 impl Drop for WebGlProgram {
     fn drop(&mut self) {
-        self.context.delete_program(Some(&self.program));
+        self.context.delete_program(Some(&self.gl_program));
     }
 }
 
 pub struct WebGlShader {
-    context: web_sys::WebGl2RenderingContext,
-    shader: web_sys::WebGlShader,
-}
-
-impl Drop for GLShader {
-    fn drop(&mut self) {
-        self.context.delete_shader(Some(&self.shader));
-    }
+    gl_shader: web_sys::WebGlShader,
 }
 
 pub struct WebGlTexture {
@@ -642,20 +919,23 @@ impl TextureFormatExt for TextureFormat {
             TextureFormat::R8 => WebGl::R8,
             TextureFormat::R16F => WebGl::R16F,
             TextureFormat::RGBA8 => WebGl::RGBA,
+            TextureFormat::RGBA16F => WebGl::RGBA16F,
+            TextureFormat::RGBA32F => WebGl::RGBA32F,
         }
     }
 
     fn gl_format(self) -> u32 {
         match self {
             TextureFormat::R8 | TextureFormat::R16F => WebGl::RED,
-            TextureFormat::RGBA8 => WebGl::RGBA,
+            TextureFormat::RGBA8 | TextureFormat::RGBA16F | TextureFormat::RGBA32F => WebGl::RGBA,
         }
     }
 
     fn gl_type(self) -> u32 {
         match self {
             TextureFormat::R8 | TextureFormat::RGBA8 => WebGl::UNSIGNED_BYTE,
-            TextureFormat::R16F => WebGl::HALF_FLOAT,
+            TextureFormat::R16F | TextureFormat::RGBA16F => WebGl::HALF_FLOAT,
+            TextureFormat::RGBA32F => WebGl::FLOAT,
         }
     }
 }
