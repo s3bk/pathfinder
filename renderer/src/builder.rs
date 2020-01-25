@@ -23,8 +23,13 @@ use pathfinder_geometry::rect::{RectF, RectI};
 use pathfinder_geometry::util;
 use pathfinder_simd::default::{F32x4, I32x4};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
 use std::u16;
+
+#[cfg(target_arch = "wasm32")]
+use std::time::Duration;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 
 pub(crate) struct SceneBuilder<'a, L: RenderCommandListener> {
     scene: &'a Scene,
@@ -53,6 +58,7 @@ impl<'a, L: RenderCommandListener> SceneBuilder<'a, L> {
     }
 
     pub fn build<E>(&mut self, executor: &E) where E: Executor {
+        #[cfg(not(target_arch = "wasm32"))]
         let start_time = Instant::now();
 
         let bounding_quad = self.built_options.bounding_quad();
@@ -68,7 +74,12 @@ impl<'a, L: RenderCommandListener> SceneBuilder<'a, L> {
 
         self.finish_building(alpha_tiles);
 
+        #[cfg(not(target_arch = "wasm32"))]
         let build_time = Instant::now() - start_time;
+
+        #[cfg(target_arch = "wasm32")]
+        let build_time = Duration::from_millis(0);
+
         self.listener.send(RenderCommand::Finish { build_time });
     }
 

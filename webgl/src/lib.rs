@@ -753,7 +753,7 @@ impl Device for WebGlDevice {
 
     #[inline]
     fn recv_timer_query(&self, query: &WebGlTimerQuery) -> Duration {
-        unimplemented!()
+        Duration::from_millis(0)
     }
     fn try_recv_texture_data(&self, receiver: &Self::TextureDataReceiver) -> Option<TextureData> {
         None
