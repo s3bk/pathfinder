@@ -26,21 +26,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use std::u16;
 
-pub(crate) struct SceneBuilder<'a> {
+pub(crate) struct SceneBuilder<'a, L: RenderCommandListener> {
     scene: &'a Scene,
     built_options: &'a PreparedBuildOptions,
 
     pub(crate) next_alpha_tile_index: AtomicUsize,
     pub(crate) z_buffer: ZBuffer,
-    pub(crate) listener: Box<dyn RenderCommandListener>,
+    pub(crate) listener: L,
 }
 
-impl<'a> SceneBuilder<'a> {
+impl<'a, L: RenderCommandListener> SceneBuilder<'a, L> {
     pub(crate) fn new(
         scene: &'a Scene,
         built_options: &'a PreparedBuildOptions,
-        listener: Box<dyn RenderCommandListener>,
-    ) -> SceneBuilder<'a> {
+        listener: L,
+    ) -> SceneBuilder<'a, L> {
         let effective_view_box = scene.effective_view_box(built_options);
         SceneBuilder {
             scene,
@@ -157,9 +157,9 @@ impl BuiltObject {
         self.tiles.rect
     }
 
-    fn add_fill(
+    fn add_fill<L: RenderCommandListener>(
         &mut self,
-        builder: &SceneBuilder,
+        builder: &SceneBuilder<L>,
         segment: LineSegment2F,
         tile_coords: Vector2I,
     ) {
@@ -209,9 +209,9 @@ impl BuiltObject {
         });
     }
 
-    fn get_or_allocate_alpha_tile_index(
+    fn get_or_allocate_alpha_tile_index<L: RenderCommandListener>(
         &mut self,
-        builder: &SceneBuilder,
+        builder: &SceneBuilder<L>,
         tile_coords: Vector2I,
     ) -> u16 {
         let local_tile_index = self.tiles.coords_to_index_unchecked(tile_coords);
@@ -227,9 +227,9 @@ impl BuiltObject {
         alpha_tile_index
     }
 
-    pub(crate) fn add_active_fill(
+    pub(crate) fn add_active_fill<L: RenderCommandListener>(
         &mut self,
-        builder: &SceneBuilder,
+        builder: &SceneBuilder<L>,
         left: f32,
         right: f32,
         mut winding: i32,
@@ -263,9 +263,9 @@ impl BuiltObject {
         }
     }
 
-    pub(crate) fn generate_fill_primitives_for_line(
+    pub(crate) fn generate_fill_primitives_for_line<L: RenderCommandListener>(
         &mut self,
-        builder: &SceneBuilder,
+        builder: &SceneBuilder<L>,
         mut segment: LineSegment2F,
         tile_y: i32,
     ) {
