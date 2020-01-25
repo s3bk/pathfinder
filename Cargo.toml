@@ -34,11 +34,26 @@ members = [
 ]
 
 default-members = [
+    "c",
+    "canvas",
     "content",
+    "examples/canvas_glutin_minimal",
+    "examples/canvas_minimal",
+    "examples/canvas_moire",
+    "examples/lottie_basic",
+    "examples/swf_basic",
     "geometry",
+    "gl",
     "gpu",
+    "lottie",
     "export",
     "renderer",
     "simd",
-    "webgl",
+    "svg",
+    "swf",
+    "ui",
+    "utils/area-lut",
+    "utils/gamma-lut",
+    "utils/svg-to-skia",
+    "utils/convert",
 ]
