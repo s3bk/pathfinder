@@ -40,6 +40,7 @@ pub struct WebGlDevice {
 }
 impl WebGlDevice {
     pub fn new(context: web_sys::WebGl2RenderingContext) -> Self {
+        context.get_extension("EXT_color_buffer_float").unwrap();
         WebGlDevice { context }
     }
 
