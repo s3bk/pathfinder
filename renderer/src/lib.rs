@@ -13,7 +13,7 @@
 #[macro_use]
 extern crate bitflags;
 #[macro_use]
-extern crate log;
+extern crate log2;
 
 pub mod concurrent;
 pub mod gpu;

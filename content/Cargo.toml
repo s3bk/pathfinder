@@ -7,8 +7,8 @@ edition = "2018"
 [dependencies]
 arrayvec = "0.4"
 bitflags = "1.0"
-log = "0.4"
 smallvec = "0.6"
+log2 = { git = "https://github.com/s3bk/log2" }
 
 [dependencies.pathfinder_geometry]
 path = "../geometry"
