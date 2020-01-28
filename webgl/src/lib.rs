@@ -11,7 +11,7 @@
 //! An OpenGL implementation of the device abstraction.
 
 #[macro_use]
-extern crate log2;
+extern crate log;
 
 use web_sys::{
     HtmlCanvasElement,

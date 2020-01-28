@@ -6,7 +6,7 @@ authors = ["Sebastian Köln <s3bk@protonmail.com>"]
 
 [dependencies]
 wasm-bindgen = "*"
-log2 = { git = "https://github.com/s3bk/log2" }
+log = "0.4.8"
 
 [dependencies.image]
 version = "0.21"

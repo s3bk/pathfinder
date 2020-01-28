@@ -1309,16 +1309,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "log2"
-version = "0.1.0"
-source = "git+https://github.com/s3bk/log2#9665a1815fa7aaf03c5f456ce3522bad516c84b2"
-dependencies = [
- "cfg-if",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
 name = "lottie_basic"
 version = "0.1.0"
 dependencies = [
@@ -1691,7 +1681,7 @@ version = "0.1.0"
 dependencies = [
  "arrayvec 0.4.12",
  "bitflags",
- "log2",
+ "log 0.4.8",
  "pathfinder_geometry",
  "pathfinder_simd",
  "smallvec 0.6.13",
@@ -1819,7 +1809,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "hashbrown",
- "log2",
+ "log 0.4.8",
  "pathfinder_content",
  "pathfinder_geometry",
  "pathfinder_gpu",
@@ -1895,7 +1885,7 @@ name = "pathfinder_webgl"
 version = "0.1.0"
 dependencies = [
  "image 0.21.3",
- "log2",
+ "log 0.4.8",
  "pathfinder_geometry",
  "pathfinder_gpu",
  "pathfinder_renderer",
