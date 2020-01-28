@@ -9,10 +9,7 @@ repository = "https://github.com/servo/pathfinder"
 homepage = "https://github.com/servo/pathfinder"
 
 [dependencies]
-
-[dependencies.log]
-version = "0.4"
-features = ["release_max_level_warn"]
+log = "0.4.8"
 
 [dependencies.pathfinder_simd]
 path = "../simd"
