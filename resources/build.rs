@@ -12,7 +12,13 @@ fn add_dir(map: &mut Map<String>, root: &Path, dir: &Path) {
         let path = dir.join(entry.file_name());
         if typ.is_file() {
             let file_path = root.join(&path);
-            map.entry(path.to_str().expect("non-utf8 filename").into(), &format!("include_bytes!({:?})", file_path));
+            // make map key independent from the build platform
+            let map_key = path
+                .components()
+                .map(|c| c.as_os_str().to_str().expect("non-utf8 filename"))
+                .collect::<Vec<_>>()
+                .join("/");
+            map.entry(map_key, &format!("include_bytes!({:?})", file_path));
         } else if typ.is_dir() {
             add_dir(map, root, &path)
         }
