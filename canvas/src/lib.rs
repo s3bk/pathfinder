@@ -21,9 +21,9 @@ use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_content::stroke::{LineCap, LineJoin as StrokeLineJoin};
 use pathfinder_content::stroke::{OutlineStrokeToFill, StrokeStyle};
 use pathfinder_geometry::line_segment::LineSegment2F;
-use pathfinder_geometry::vector::Vector2F;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::transform2d::Transform2F;
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use pathfinder_renderer::paint::{Paint, PaintId};
 use pathfinder_renderer::scene::{ClipPath, ClipPathId, DrawPath, RenderTarget, Scene};
 use std::borrow::Cow;
@@ -32,17 +32,38 @@ use std::f32::consts::PI;
 use std::fmt::{Debug, Error as FmtError, Formatter};
 use std::mem;
 use std::sync::Arc;
-use text::FontCollection;
+
+pub use text::CanvasFontContext;
+
+#[cfg(feature = "pf-text")]
+use skribo::FontCollection;
+#[cfg(not(feature = "pf-text"))]
+use crate::text::FontCollection;
 
 #[cfg(feature = "pf-text")]
 pub use text::TextMetrics;
-pub use text::CanvasFontContext;
+
 
 const HAIRLINE_STROKE_WIDTH: f32 = 0.0333;
 const DEFAULT_FONT_SIZE: f32 = 10.0;
 
-#[cfg_attr(not(feature = "pf-text"), path = "text_no_text.rs")]
+#[cfg(feature = "pf-text")]
 mod text;
+
+// For users who don't want text capability, include a tiny convenience stub.
+#[cfg(not(feature = "pf-text"))]
+mod text {
+    #[derive(Clone)]
+    pub struct CanvasFontContext;
+
+    impl CanvasFontContext {
+        pub fn from_system_source() -> Self {
+            CanvasFontContext
+        }
+    }
+
+    pub struct FontCollection;
+}
 
 #[cfg(test)]
 mod tests;
@@ -59,7 +80,7 @@ impl CanvasRenderingContext2D {
     #[inline]
     pub fn new(font_context: CanvasFontContext, size: Vector2F) -> CanvasRenderingContext2D {
         let mut scene = Scene::new();
-        scene.set_view_box(RectF::new(Vector2F::default(), size));
+        scene.set_view_box(RectF::new(Vector2F::zero(), size));
         CanvasRenderingContext2D::from_scene(font_context, scene)
     }
 
@@ -155,13 +176,13 @@ impl CanvasRenderingContext2D {
     // Fill and stroke styles
 
     #[inline]
-    pub fn set_fill_style(&mut self, new_fill_style: FillStyle) {
-        self.current_state.fill_paint = new_fill_style.into_paint();
+    pub fn set_fill_style<FS>(&mut self, new_fill_style: FS) where FS: Into<FillStyle> {
+        self.current_state.fill_paint = new_fill_style.into().into_paint();
     }
 
     #[inline]
-    pub fn set_stroke_style(&mut self, new_stroke_style: FillStyle) {
-        self.current_state.stroke_paint = new_stroke_style.into_paint();
+    pub fn set_stroke_style<FS>(&mut self, new_stroke_style: FS) where FS: Into<FillStyle> {
+        self.current_state.stroke_paint = new_stroke_style.into().into_paint();
     }
 
     // Shadows
@@ -414,6 +435,7 @@ struct State {
     shadow_blur: f32,
     shadow_offset: Vector2F,
     text_align: TextAlign,
+    text_baseline: TextBaseline,
     image_smoothing_enabled: bool,
     image_smoothing_quality: ImageSmoothingQuality,
     global_alpha: f32,
@@ -437,8 +459,9 @@ impl State {
             stroke_paint: Paint::black(),
             shadow_paint: Paint::transparent_black(),
             shadow_blur: 0.0,
-            shadow_offset: Vector2F::default(),
+            shadow_offset: Vector2F::zero(),
             text_align: TextAlign::Left,
+            text_baseline: TextBaseline::Alphabetic,
             image_smoothing_enabled: true,
             image_smoothing_quality: ImageSmoothingQuality::Low,
             global_alpha: 1.0,
@@ -448,14 +471,16 @@ impl State {
     }
 
     fn resolve_paint<'a>(&self, paint: &'a Paint) -> Cow<'a, Paint> {
-        if self.transform.is_identity() {
-            return Cow::Borrowed(paint);
-        }
-        if let Paint::Pattern(ref pattern) = *paint {
-            if !self.image_smoothing_enabled ==
-                    pattern.flags.contains(PatternFlags::NO_SMOOTHING) {
-                return Cow::Borrowed(paint)
+        let mut must_copy = !self.transform.is_identity();
+        if !must_copy {
+            if let Paint::Pattern(ref pattern) = *paint {
+                must_copy = !self.image_smoothing_enabled !=
+                    pattern.flags.contains(PatternFlags::NO_SMOOTHING);
             }
+        }
+
+        if !must_copy {
+            return Cow::Borrowed(paint);
         }
 
         let mut paint = (*paint).clone();
@@ -541,8 +566,8 @@ impl Path2D {
 
         let transform = Transform2F::from_scale(Vector2F::splat(radius)).translate(center);
 
-        let chord = LineSegment2F::new(vu0.yx().scale_xy(Vector2F::new(-1.0, 1.0)),
-                                      vu1.yx().scale_xy(Vector2F::new(1.0, -1.0)));
+        let chord = LineSegment2F::new(vu0.yx().scale_xy(vec2f(-1.0,  1.0)),
+                                       vu1.yx().scale_xy(vec2f( 1.0, -1.0)));
 
         // FIXME(pcwalton): Is clockwise direction correct?
         self.current_contour.push_arc_from_unit_chord(&transform, chord, ArcDirection::CW);
@@ -619,6 +644,16 @@ pub enum TextAlign {
     Left,
     Right,
     Center,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TextBaseline {
+    Alphabetic,
+    Top,
+    Hanging,
+    Middle,
+    Ideographic,
+    Bottom,
 }
 
 // We duplicate `pathfinder_content::stroke::LineJoin` here because the HTML canvas API treats the
@@ -706,5 +741,26 @@ pub enum ImageSmoothingQuality {
 impl Debug for Path2D {
     fn fmt(&self, formatter: &mut Formatter) -> Result<(), FmtError> {
         self.clone().into_outline().fmt(formatter)
+    }
+}
+
+impl From<ColorU> for FillStyle {
+    #[inline]
+    fn from(color: ColorU) -> FillStyle {
+        FillStyle::Color(color)
+    }
+}
+
+impl From<Gradient> for FillStyle {
+    #[inline]
+    fn from(gradient: Gradient) -> FillStyle {
+        FillStyle::Gradient(gradient)
+    }
+}
+
+impl From<Pattern> for FillStyle {
+    #[inline]
+    fn from(pattern: Pattern) -> FillStyle {
+        FillStyle::Pattern(pattern)
     }
 }

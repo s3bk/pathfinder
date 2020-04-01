@@ -14,7 +14,8 @@ use crate::render_target::RenderTargetId;
 use crate::util;
 use pathfinder_color::{self as color, ColorU};
 use pathfinder_geometry::transform2d::Transform2F;
-use pathfinder_geometry::vector::Vector2I;
+use pathfinder_geometry::vector::{Vector2I, vec2i};
+use std::collections::hash_map::DefaultHasher;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 
@@ -38,10 +39,11 @@ pub enum PatternSource {
 /// RGBA, non-premultiplied.
 // FIXME(pcwalton): Hash the pixel contents so that we don't have to compare every pixel!
 // TODO(pcwalton): Should the pixels be premultiplied?
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Image {
     size: Vector2I,
     pixels: Vec<ColorU>,
+    pixels_hash: u64,
     is_opaque: bool,
 }
 
@@ -65,14 +67,19 @@ impl Image {
     pub fn new(size: Vector2I, pixels: Vec<ColorU>) -> Image {
         assert_eq!(size.x() as usize * size.y() as usize, pixels.len());
         let is_opaque = pixels.iter().all(|pixel| pixel.is_opaque());
-        Image { size, pixels, is_opaque }
+
+        let mut pixels_hasher = DefaultHasher::new();
+        pixels.hash(&mut pixels_hasher);
+        let pixels_hash = pixels_hasher.finish();
+
+        Image { size, pixels, pixels_hash, is_opaque }
     }
 
     #[cfg(feature = "pf-image")]
     pub fn from_image_buffer(image_buffer: RgbaImage) -> Image {
         let (width, height) = image_buffer.dimensions();
         let pixels = color::u8_vec_to_color_vec(image_buffer.into_raw());
-        Image::new(Vector2I::new(width as i32, height as i32), pixels)
+        Image::new(vec2i(width as i32, height as i32), pixels)
     }
 
     #[inline]
@@ -108,6 +115,14 @@ impl Debug for Image {
     #[inline]
     fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
         write!(formatter, "(image {}×{} px)", self.size.x(), self.size.y())
+    }
+}
+
+impl Hash for Image {
+    fn hash<H>(&self, hasher: &mut H) where H: Hasher {
+        self.size.hash(hasher);
+        self.pixels_hash.hash(hasher);
+        self.is_opaque.hash(hasher);
     }
 }
 

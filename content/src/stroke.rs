@@ -15,6 +15,7 @@ use crate::segment::Segment;
 use pathfinder_geometry::line_segment::LineSegment2F;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::transform2d::Transform2F;
+use pathfinder_geometry::util::EPSILON;
 use pathfinder_geometry::vector::Vector2F;
 use std::f32;
 
@@ -117,7 +118,21 @@ impl<'a> OutlineStrokeToFill<'a> {
         }
 
         let width = self.style.line_width;
-        let (p0, p1) = (contour.position_of_last(2), contour.position_of_last(1));
+        let p1 = contour.position_of_last(1);
+
+        // Determine the ending gradient.
+        let mut p0;
+        let mut p0_index = contour.len() - 2;
+        loop {
+            p0 = contour.position_of(p0_index);
+            if (p1 - p0).square_length() > EPSILON {
+                break;
+            }
+            if p0_index == 0 {
+                return;
+            }
+            p0_index -= 1;
+        }
         let gradient = (p1 - p0).normalize();
 
         match self.style.line_cap {
@@ -360,15 +375,23 @@ impl Contour {
         let (p0, p1) = (self.position_of_last(2), self.position_of_last(1));
         let prev_tangent = LineSegment2F::new(p0, p1);
 
+        if prev_tangent.square_length() < EPSILON || next_tangent.square_length() < EPSILON {
+            return;
+        }
+
         match join {
             LineJoin::Bevel => {}
             LineJoin::Miter(miter_limit) => {
                 if let Some(prev_tangent_t) = prev_tangent.intersection_t(next_tangent) {
+                    if prev_tangent_t < -EPSILON {
+                        return;
+                    }
                     let miter_endpoint = prev_tangent.sample(prev_tangent_t);
                     let threshold = miter_limit * distance;
-                    if (miter_endpoint - join_point).square_length() <= threshold * threshold {
-                        self.push_endpoint(miter_endpoint);
+                    if (miter_endpoint - join_point).square_length() > threshold * threshold {
+                        return;
                     }
+                    self.push_endpoint(miter_endpoint);
                 }
             }
             LineJoin::Round => {
