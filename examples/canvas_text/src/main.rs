@@ -11,7 +11,7 @@
 use font_kit::handle::Handle;
 use pathfinder_canvas::{CanvasFontContext, CanvasRenderingContext2D, TextAlign};
 use pathfinder_color::ColorF;
-use pathfinder_geometry::vector::{Vector2F, Vector2I, vec2f, vec2i};
+use pathfinder_geometry::vector::{vec2f, vec2i};
 use pathfinder_gl::{GLDevice, GLVersion};
 use pathfinder_renderer::concurrent::rayon::RayonExecutor;
 use pathfinder_renderer::concurrent::scene_proxy::SceneProxy;
@@ -56,15 +56,15 @@ fn main() {
                                      RendererOptions { background_color: Some(ColorF::white()) });
 
     // Load a font.
-    let font_data = resource_loader.slurp("fonts/overpass-regular.otf").unwrap().to_vec();
-    let font = Handle::from_memory(Arc::new(font_data), 0);
+    let font_data = Arc::new(resource_loader.slurp("fonts/Overpass-Regular.otf").unwrap());
+    let font = Handle::from_memory(font_data, 0);
     let font_context = CanvasFontContext::from_fonts(iter::once(font));
 
     // Make a canvas.
     let mut canvas = CanvasRenderingContext2D::new(font_context, window_size.to_f32());
 
     // Draw the text.
-    canvas.set_font_by_postscript_name("Overpass-Regular");
+    canvas.set_font("Overpass-Regular");
     canvas.set_font_size(32.0);
     canvas.fill_text("Hello Pathfinder!", vec2f(32.0, 48.0));
     canvas.set_text_align(TextAlign::Right);

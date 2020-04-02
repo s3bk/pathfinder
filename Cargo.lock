@@ -293,6 +293,7 @@ name = "canvas_nanovg"
 version = "0.1.0"
 dependencies = [
  "arrayvec 0.5.1",
+ "font-kit",
  "gl",
  "image",
  "pathfinder_canvas",
