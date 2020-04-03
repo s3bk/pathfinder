@@ -50,7 +50,7 @@ pub enum Paint {
     Pattern(Pattern),
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PaintId(pub u16);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -236,7 +236,7 @@ impl Palette {
                 }
                 Paint::Pattern(ref pattern) => {
                     match pattern.source {
-                        PatternSource::RenderTarget(render_target_id) => {
+                        PatternSource::RenderTarget { id: render_target_id, .. } => {
                             texture_location =
                                 render_target_metadata[render_target_id.0 as usize].location;
                         }
@@ -311,7 +311,7 @@ impl Palette {
                         transform.inverse() * render_transform
                 }
                 Paint::Pattern(Pattern {
-                    source: PatternSource::RenderTarget(_),
+                    source: PatternSource::RenderTarget { .. },
                     transform,
                     ..
                 }) => {

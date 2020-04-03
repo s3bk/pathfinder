@@ -18,10 +18,12 @@ use crate::paint::{Paint, PaintId, PaintInfo, Palette};
 use pathfinder_content::effects::{BlendMode, Effects};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::outline::Outline;
+use pathfinder_content::pattern::{Pattern, PatternSource};
 use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::{Vector2I, vec2f};
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct Scene {
@@ -47,19 +49,23 @@ impl Scene {
     }
 
     pub fn push_path(&mut self, path: DrawPath) {
-        self.bounds = self.bounds.union_rect(path.outline.bounds());
+        let path_index = self.paths.len() as u32;
         self.paths.push(path);
+        self.push_path_with_index(path_index);
+    }
 
-        let new_path_count = self.paths.len() as u32;
+    fn push_path_with_index(&mut self, path_index: u32) {
+        self.bounds = self.bounds.union_rect(self.paths[path_index as usize].outline.bounds());
+
         if let Some(DisplayItem::DrawPaths {
             start_index: _,
             ref mut end_index
         }) = self.display_list.last_mut() {
-            *end_index = new_path_count;
+            *end_index = path_index + 1;
         } else {
             self.display_list.push(DisplayItem::DrawPaths {
-                start_index: new_path_count - 1,
-                end_index: new_path_count,
+                start_index: path_index,
+                end_index: path_index + 1,
             });
         }
     }
@@ -83,6 +89,95 @@ impl Scene {
 
     pub fn draw_render_target(&mut self, render_target: RenderTargetId, effects: Effects) {
         self.display_list.push(DisplayItem::DrawRenderTarget { render_target, effects });
+    }
+
+    pub fn append_scene(&mut self, scene: Scene) {
+        // Merge render targets.
+        let mut render_target_mapping = HashMap::new();
+        for (old_render_target_index, render_target) in scene.palette   
+                                                             .render_targets
+                                                             .into_iter()
+                                                             .enumerate() {
+            let old_render_target_id = RenderTargetId(old_render_target_index as u32);
+            let new_render_target_id = self.palette.push_render_target(render_target);
+            render_target_mapping.insert(old_render_target_id, new_render_target_id);
+        }
+
+        // Merge paints.
+        let mut paint_mapping = HashMap::new();
+        for (old_paint_index, old_paint) in scene.palette.paints.iter().enumerate() {
+            let old_paint_id = PaintId(old_paint_index as u16);
+            let new_paint_id = match old_paint {
+                Paint::Pattern(Pattern {
+                    source: PatternSource::RenderTarget { id: old_render_target_id, size },
+                    transform,
+                    flags
+                }) => {
+                    self.palette.push_paint(&Paint::Pattern(Pattern {
+                        source: PatternSource::RenderTarget {
+                            id: render_target_mapping[old_render_target_id],
+                            size: *size,
+                        },
+                        transform: *transform,
+                        flags: *flags,
+                    }))
+                }
+                paint => self.palette.push_paint(paint),
+            };
+            paint_mapping.insert(old_paint_id, new_paint_id);
+        }
+
+        // Merge clip paths.
+        let mut clip_path_mapping = Vec::with_capacity(scene.clip_paths.len());
+        for clip_path in scene.clip_paths {
+            clip_path_mapping.push(self.clip_paths.len());
+            self.clip_paths.push(clip_path);
+        }
+
+        // Merge draw paths.
+        let mut draw_path_mapping = Vec::with_capacity(scene.paths.len());
+        for draw_path in scene.paths {
+            draw_path_mapping.push(self.paths.len() as u32);
+            self.paths.push(DrawPath {
+                outline: draw_path.outline,
+                paint: paint_mapping[&draw_path.paint],
+                clip_path: draw_path.clip_path.map(|clip_path_id| {
+                    ClipPathId(clip_path_mapping[clip_path_id.0 as usize] as u32)
+                }),
+                fill_rule: draw_path.fill_rule,
+                blend_mode: draw_path.blend_mode,
+                opacity: draw_path.opacity,
+                name: draw_path.name,
+            });
+        }
+
+        // Merge display items.
+        for display_item in scene.display_list {
+            match display_item {
+                DisplayItem::DrawRenderTarget {
+                    render_target: old_render_target_id,
+                    effects,
+                } => {
+                    let new_render_target_id = render_target_mapping[&old_render_target_id];
+                    self.draw_render_target(new_render_target_id, effects)
+                }
+                DisplayItem::PushRenderTarget(old_render_target_id) => {
+                    let new_render_target_id = render_target_mapping[&old_render_target_id];
+                    self.display_list.push(DisplayItem::PushRenderTarget(new_render_target_id));
+                }
+                DisplayItem::PopRenderTarget => {
+                    self.display_list.push(DisplayItem::PopRenderTarget);
+                }
+                DisplayItem::DrawPaths {
+                    start_index: old_start_path_index,
+                    end_index: old_end_path_index,
+                } => {
+                    for old_path_index in old_start_path_index..old_end_path_index {
+                        self.push_path_with_index(draw_path_mapping[old_path_index as usize])
+                    }
+                }
+            }
+        }
     }
 
     #[inline]

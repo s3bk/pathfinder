@@ -16,7 +16,7 @@ use pathfinder_content::effects::{BlendMode, BlurDirection, Effects, Filter};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::gradient::Gradient;
 use pathfinder_content::outline::{ArcDirection, Contour, Outline};
-use pathfinder_content::pattern::{Pattern, PatternFlags};
+use pathfinder_content::pattern::{Pattern, PatternFlags, PatternSource};
 use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_content::stroke::{LineCap, LineJoin as StrokeLineJoin};
 use pathfinder_content::stroke::{OutlineStrokeToFill, StrokeStyle};
@@ -43,7 +43,6 @@ use crate::text::FontCollection;
 #[cfg(feature = "pf-text")]
 pub use text::TextMetrics;
 
-
 const HAIRLINE_STROKE_WIDTH: f32 = 0.0333;
 const DEFAULT_FONT_SIZE: f32 = 10.0;
 
@@ -68,8 +67,44 @@ mod text {
 #[cfg(test)]
 mod tests;
 
-pub struct CanvasRenderingContext2D {
+pub struct Canvas {
     scene: Scene,
+}
+
+impl Canvas {
+    #[inline]
+    pub fn new(size: Vector2F) -> Canvas {
+        let mut scene = Scene::new();
+        scene.set_view_box(RectF::new(Vector2F::zero(), size));
+        Canvas::from_scene(scene)
+    }
+
+    #[inline]
+    pub fn from_scene(scene: Scene) -> Canvas {
+        Canvas { scene }
+    }
+
+    #[inline]
+    pub fn into_scene(self) -> Scene {
+        self.scene
+    }
+
+    pub fn get_context_2d(self, font_context: CanvasFontContext) -> CanvasRenderingContext2D {
+        #[cfg(feature = "pf-text")]
+        let default_font_collection = font_context.default_font_collection.clone();
+        #[cfg(not(feature = "pf-text"))]
+        let default_font_collection = Arc::new(FontCollection);
+        CanvasRenderingContext2D {
+            canvas: self,
+            current_state: State::default(default_font_collection),
+            saved_states: vec![],
+            font_context,
+        }
+    }
+}
+
+pub struct CanvasRenderingContext2D {
+    canvas: Canvas,
     current_state: State,
     saved_states: Vec<State>,
     #[allow(dead_code)]
@@ -77,29 +112,21 @@ pub struct CanvasRenderingContext2D {
 }
 
 impl CanvasRenderingContext2D {
-    #[inline]
-    pub fn new(font_context: CanvasFontContext, size: Vector2F) -> CanvasRenderingContext2D {
-        let mut scene = Scene::new();
-        scene.set_view_box(RectF::new(Vector2F::zero(), size));
-        CanvasRenderingContext2D::from_scene(font_context, scene)
-    }
+    // Canvas accessors
 
-    pub fn from_scene(font_context: CanvasFontContext, scene: Scene) -> CanvasRenderingContext2D {
-        #[cfg(feature = "pf-text")]
-        let default_font_collection = font_context.default_font_collection.clone();
-        #[cfg(not(feature = "pf-text"))]
-        let default_font_collection = Arc::new(FontCollection);
-        CanvasRenderingContext2D {
-            scene,
-            current_state: State::default(default_font_collection),
-            saved_states: vec![],
-            font_context,
-        }
+    #[inline]
+    pub fn canvas(&self) -> &Canvas {
+        &self.canvas
     }
 
     #[inline]
-    pub fn into_scene(self) -> Scene {
-        self.scene
+    pub fn into_canvas(self) -> Canvas {
+        self.canvas
+    }
+
+    #[inline]
+    pub fn font_context(&self) -> CanvasFontContext {
+        self.font_context.clone()
     }
 
     // Drawing rectangles
@@ -124,14 +151,14 @@ impl CanvasRenderingContext2D {
 
         let paint = Paint::transparent_black();
         let paint = self.current_state.resolve_paint(&paint);
-        let paint_id = self.scene.push_paint(&paint);
+        let paint_id = self.canvas.scene.push_paint(&paint);
 
         let mut outline = path.into_outline();
         outline.transform(&self.current_state.transform);
 
         let mut path = DrawPath::new(outline, paint_id);
         path.set_blend_mode(BlendMode::Clear);
-        self.scene.push_path(path);
+        self.canvas.scene.push_path(path);
     }
 
     // Line styles
@@ -225,14 +252,14 @@ impl CanvasRenderingContext2D {
     #[inline]
     pub fn fill_path(&mut self, path: Path2D, fill_rule: FillRule) {
         let paint = self.current_state.resolve_paint(&self.current_state.fill_paint);
-        let paint_id = self.scene.push_paint(&paint);
+        let paint_id = self.canvas.scene.push_paint(&paint);
         self.push_path(path.into_outline(), paint_id, fill_rule);
     }
 
     #[inline]
     pub fn stroke_path(&mut self, path: Path2D) {
         let paint = self.current_state.resolve_paint(&self.current_state.stroke_paint);
-        let paint_id = self.scene.push_paint(&paint);
+        let paint_id = self.canvas.scene.push_paint(&paint);
 
         let mut stroke_style = self.current_state.resolve_stroke_style();
 
@@ -267,7 +294,7 @@ impl CanvasRenderingContext2D {
 
         let mut clip_path = ClipPath::new(outline);
         clip_path.set_fill_rule(fill_rule);
-        let clip_path_id = self.scene.push_clip_path(clip_path);
+        let clip_path_id = self.canvas.scene.push_clip_path(clip_path);
 
         self.current_state.clip_path = Some(clip_path_id);
     }
@@ -282,7 +309,7 @@ impl CanvasRenderingContext2D {
             let shadow_blur_render_target_ids = self.push_shadow_blur_render_targets_if_needed();
 
             let paint = self.current_state.resolve_paint(&self.current_state.shadow_paint);
-            let paint_id = self.scene.push_paint(&paint);
+            let paint_id = self.canvas.scene.push_paint(&paint);
 
             let mut outline = outline.clone();
             outline.transform(&(Transform2F::from_translation(self.current_state.shadow_offset) *
@@ -293,7 +320,7 @@ impl CanvasRenderingContext2D {
             path.set_fill_rule(fill_rule);
             path.set_blend_mode(blend_mode);
             path.set_opacity(opacity);
-            self.scene.push_path(path);
+            self.canvas.scene.push_path(path);
 
             self.composite_shadow_blur_render_targets_if_needed(shadow_blur_render_target_ids);
         }
@@ -305,7 +332,7 @@ impl CanvasRenderingContext2D {
         path.set_fill_rule(fill_rule);
         path.set_blend_mode(blend_mode);
         path.set_opacity(opacity);
-        self.scene.push_path(path);
+        self.canvas.scene.push_path(path);
     }
 
     fn push_shadow_blur_render_targets_if_needed(&mut self) -> Option<[RenderTargetId; 2]> {
@@ -313,11 +340,11 @@ impl CanvasRenderingContext2D {
             return None;
         }
 
-        let render_target_size = self.scene.view_box().size().ceil().to_i32();
-        let render_target_id_a =
-            self.scene.push_render_target(RenderTarget::new(render_target_size, String::new()));
-        let render_target_id_b =
-            self.scene.push_render_target(RenderTarget::new(render_target_size, String::new()));
+        let render_target_size = self.canvas.scene.view_box().size().ceil().to_i32();
+        let render_target_a = RenderTarget::new(render_target_size, String::new());
+        let render_target_id_a = self.canvas.scene.push_render_target(render_target_a);
+        let render_target_b = RenderTarget::new(render_target_size, String::new());
+        let render_target_id_b = self.canvas.scene.push_render_target(render_target_b);
         Some([render_target_id_a, render_target_id_b])
     }
 
@@ -330,13 +357,13 @@ impl CanvasRenderingContext2D {
         };
 
         let sigma = self.current_state.shadow_blur * 0.5;
-        self.scene.pop_render_target();
-        self.scene.draw_render_target(render_target_ids[1], Effects::new(Filter::Blur {
+        self.canvas.scene.pop_render_target();
+        self.canvas.scene.draw_render_target(render_target_ids[1], Effects::new(Filter::Blur {
             direction: BlurDirection::X,
             sigma,
         }));
-        self.scene.pop_render_target();
-        self.scene.draw_render_target(render_target_ids[0], Effects::new(Filter::Blur {
+        self.canvas.scene.pop_render_target();
+        self.canvas.scene.draw_render_target(render_target_ids[0], Effects::new(Filter::Blur {
             direction: BlurDirection::Y,
             sigma,
         }));
@@ -345,12 +372,27 @@ impl CanvasRenderingContext2D {
     // Transformations
 
     #[inline]
-    pub fn current_transform(&self) -> Transform2F {
+    pub fn rotate(&mut self, angle: f32) {
+        self.current_state.transform *= Transform2F::from_rotation(angle)
+    }
+
+    #[inline]
+    pub fn scale<S>(&mut self, scale: S) where S: IntoVector2F {
+        self.current_state.transform *= Transform2F::from_scale(scale)
+    }
+
+    #[inline]
+    pub fn translate(&mut self, offset: Vector2F) {
+        self.current_state.transform *= Transform2F::from_translation(offset)
+    }
+
+    #[inline]
+    pub fn transform(&self) -> Transform2F {
         self.current_state.transform
     }
 
     #[inline]
-    pub fn set_current_transform(&mut self, new_transform: &Transform2F) {
+    pub fn set_transform(&mut self, new_transform: &Transform2F) {
         self.current_state.transform = *new_transform;
     }
 
@@ -379,6 +421,30 @@ impl CanvasRenderingContext2D {
     #[inline]
     pub fn set_global_composite_operation(&mut self, new_composite_operation: CompositeOperation) {
         self.current_state.global_composite_operation = new_composite_operation;
+    }
+
+    // Drawing images
+
+    #[inline]
+    pub fn draw_image<I, L>(&mut self, image: I, dest_location: L)
+                            where I: CanvasImageSource, L: CanvasImageDestLocation {
+        let pattern = image.to_pattern(self, Transform2F::default());
+        let src_rect = RectF::new(vec2f(0.0, 0.0), pattern.size().to_f32());
+        self.draw_subimage(pattern, src_rect, dest_location)
+    }
+
+    pub fn draw_subimage<I, L>(&mut self, image: I, src_location: RectF, dest_location: L)
+                               where I: CanvasImageSource, L: CanvasImageDestLocation {
+        let dest_size = dest_location.size().unwrap_or(src_location.size());
+        let scale = dest_size / src_location.size();
+        let offset = dest_location.origin() - src_location.origin();
+        let transform = Transform2F::from_scale(scale).translate(offset);
+
+        let pattern = image.to_pattern(self, transform);
+        let old_fill_paint = self.current_state.fill_paint.clone();
+        self.set_fill_style(pattern);
+        self.fill_rect(RectF::new(dest_location.origin(), dest_size));
+        self.current_state.fill_paint = old_fill_paint;
     }
 
     // Image smoothing
@@ -415,6 +481,23 @@ impl CanvasRenderingContext2D {
         if let Some(state) = self.saved_states.pop() {
             self.current_state = state;
         }
+    }
+
+    // Extensions
+
+    pub fn create_pattern_from_canvas(&mut self, canvas: Canvas, transform: Transform2F)
+                                      -> Pattern {
+        let subscene = canvas.into_scene();
+        let subscene_size = subscene.view_box().size().ceil().to_i32();
+        let render_target = RenderTarget::new(subscene_size, String::new());
+        let render_target_id = self.canvas.scene.push_render_target(render_target);
+        self.canvas.scene.append_scene(subscene);
+        self.canvas.scene.pop_render_target();
+        let pattern_source = PatternSource::RenderTarget {
+            id: render_target_id,
+            size: subscene_size,
+        };
+        Pattern::new(pattern_source, transform, PatternFlags::empty())
     }
 }
 
@@ -735,6 +818,54 @@ pub enum ImageSmoothingQuality {
     Low,
     Medium,
     High,
+}
+
+pub trait CanvasImageSource {
+    fn to_pattern(self, dest_context: &mut CanvasRenderingContext2D, transform: Transform2F)
+                  -> Pattern;
+}
+
+pub trait CanvasImageDestLocation {
+    fn origin(&self) -> Vector2F;
+    fn size(&self) -> Option<Vector2F>;
+}
+
+impl CanvasImageSource for Pattern {
+    #[inline]
+    fn to_pattern(mut self, _: &mut CanvasRenderingContext2D, transform: Transform2F) -> Pattern {
+        self.transform(transform);
+        self
+    }
+}
+
+impl CanvasImageSource for Canvas {
+    #[inline]
+    fn to_pattern(self, dest_context: &mut CanvasRenderingContext2D, transform: Transform2F)
+                  -> Pattern {
+        dest_context.create_pattern_from_canvas(self, transform)
+    }
+}
+
+impl CanvasImageDestLocation for RectF {
+    #[inline]
+    fn origin(&self) -> Vector2F {
+        RectF::origin(*self)
+    }
+    #[inline]
+    fn size(&self) -> Option<Vector2F> {
+        Some(RectF::size(*self))
+    }
+}
+
+impl CanvasImageDestLocation for Vector2F {
+    #[inline]
+    fn origin(&self) -> Vector2F {
+        *self
+    }
+    #[inline]
+    fn size(&self) -> Option<Vector2F> {
+        None
+    }
 }
 
 impl Debug for Path2D {
