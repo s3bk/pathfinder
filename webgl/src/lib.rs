@@ -158,6 +158,10 @@ impl WebGlDevice {
                     .uniform4f(location, data.x(), data.y(), data.z(), data.w());
                 self.ck();
             }
+            UniformData::IVec2(data) => {
+                self.context.uniform2i(location, data[0], data[1]);
+                self.ck();
+            }
             UniformData::IVec3(data) => {
                 self.context.uniform3i(location, data[0], data[1], data[2]);
                 self.ck();
