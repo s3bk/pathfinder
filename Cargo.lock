@@ -2000,6 +2000,7 @@ name = "pathfinder_webgl"
 version = "0.1.0"
 dependencies = [
  "image",
+ "js-sys",
  "pathfinder_geometry",
  "pathfinder_gpu",
  "pathfinder_log",
