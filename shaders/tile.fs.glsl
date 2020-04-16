@@ -45,7 +45,9 @@ precision highp sampler2D;
 #define COMBINER_CTRL_MASK_WINDING              0x1
 #define COMBINER_CTRL_MASK_EVEN_ODD             0x2
 
-#define COMBINER_CTRL_COLOR_ENABLE_MASK         0x1
+#define COMBINER_CTRL_COLOR_COMBINE_MASK        0x3
+#define COMBINER_CTRL_COLOR_COMBINE_SRC_IN      0x1
+#define COMBINER_CTRL_COLOR_COMBINE_DEST_IN     0x2
 
 #define COMBINER_CTRL_FILTER_MASK               0x3
 #define COMBINER_CTRL_FILTER_RADIAL_GRADIENT    0x1
@@ -72,13 +74,11 @@ precision highp sampler2D;
 
 #define COMBINER_CTRL_MASK_0_SHIFT              0
 #define COMBINER_CTRL_MASK_1_SHIFT              2
-#define COMBINER_CTRL_COLOR_0_FILTER_SHIFT      4
-#define COMBINER_CTRL_COLOR_0_ENABLE_SHIFT      6
-#define COMBINER_CTRL_COLOR_1_ENABLE_SHIFT      7
+#define COMBINER_CTRL_COLOR_FILTER_SHIFT        4
+#define COMBINER_CTRL_COLOR_COMBINE_SHIFT       6
 #define COMBINER_CTRL_COMPOSITE_SHIFT           8
 
 uniform sampler2D uColorTexture0;
-uniform sampler2D uColorTexture1;
 uniform sampler2D uMaskTexture0;
 uniform sampler2D uMaskTexture1;
 uniform sampler2D uDestTexture;
@@ -93,7 +93,7 @@ uniform int uCtrl;
 in vec3 vMaskTexCoord0;
 in vec3 vMaskTexCoord1;
 in vec2 vColorTexCoord0;
-in vec2 vColorTexCoord1;
+in vec4 vBaseColor;
 
 out vec4 oFragColor;
 
@@ -101,6 +101,18 @@ out vec4 oFragColor;
 
 vec4 sampleColor(sampler2D colorTexture, vec2 colorTexCoord) {
     return texture(colorTexture, colorTexCoord);
+}
+
+// Color combining
+
+vec4 combineColor0(vec4 destColor, vec4 srcColor, int op) {
+    switch (op) {
+    case COMBINER_CTRL_COLOR_COMBINE_SRC_IN:
+        return vec4(srcColor.rgb, srcColor.a * destColor.a);
+    case COMBINER_CTRL_COLOR_COMBINE_DEST_IN:
+        return vec4(destColor.rgb, srcColor.a * destColor.a);
+    }
+    return destColor;
 }
 
 // Text filter
@@ -311,10 +323,10 @@ vec4 filterRadialGradient(vec2 colorTexCoord,
     vec4 color = vec4(0.0);
     if (abs(discrim) >= EPSILON) {
         vec2 ts = vec2(sqrt(discrim) * vec2(1.0, -1.0) + vec2(b)) / vec2(a);
-        float tMax = max(ts.x, ts.y);
-        float t = tMax <= 1.0 ? tMax : min(ts.x, ts.y);
-        if (t >= 0.0)
-            color = texture(colorTexture, uvOrigin + vec2(t, 0.0));
+        if (ts.x > ts.y)
+            ts = ts.yx;
+        float t = ts.x >= 0.0 ? ts.x : ts.y;
+        color = texture(colorTexture, uvOrigin + vec2(clamp(t, 0.0, 1.0), 0.0));
     }
 
     return color;
@@ -558,23 +570,23 @@ void calculateColor(int ctrl) {
     maskAlpha = sampleMask(maskAlpha, uMaskTexture1, vMaskTexCoord1, maskCtrl1);
 
     // Sample color.
-    vec4 color = vec4(0.0);
-    if (((ctrl >> COMBINER_CTRL_COLOR_0_ENABLE_SHIFT) & COMBINER_CTRL_COLOR_ENABLE_MASK) != 0) {
-        int color0Filter = (ctrl >> COMBINER_CTRL_COLOR_0_FILTER_SHIFT) &
-            COMBINER_CTRL_FILTER_MASK;
-        color += filterColor(vColorTexCoord0,
-                             uColorTexture0,
-                             uGammaLUT,
-                             uColorTexture0Size,
-                             gl_FragCoord.xy,
-                             uFramebufferSize,
-                             uFilterParams0,
-                             uFilterParams1,
-                             uFilterParams2,
-                             color0Filter);
+    vec4 color = vBaseColor;
+    int color0Combine = (ctrl >> COMBINER_CTRL_COLOR_COMBINE_SHIFT) &
+        COMBINER_CTRL_COLOR_COMBINE_MASK;
+    if (color0Combine != 0) {
+        int color0Filter = (ctrl >> COMBINER_CTRL_COLOR_FILTER_SHIFT) & COMBINER_CTRL_FILTER_MASK;
+        vec4 color0 = filterColor(vColorTexCoord0,
+                                  uColorTexture0,
+                                  uGammaLUT,
+                                  uColorTexture0Size,
+                                  gl_FragCoord.xy,
+                                  uFramebufferSize,
+                                  uFilterParams0,
+                                  uFilterParams1,
+                                  uFilterParams2,
+                                  color0Filter);
+        color = combineColor0(color, color0, color0Combine);
     }
-    if (((ctrl >> COMBINER_CTRL_COLOR_1_ENABLE_SHIFT) & COMBINER_CTRL_COLOR_ENABLE_MASK) != 0)
-        color *= sampleColor(uColorTexture1, vColorTexCoord1);
 
     // Apply mask.
     color.a *= maskAlpha;

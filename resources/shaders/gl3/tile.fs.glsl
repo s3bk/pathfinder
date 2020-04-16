@@ -79,8 +79,8 @@ precision highp sampler2D;
 
 
 
+
 uniform sampler2D uColorTexture0;
-uniform sampler2D uColorTexture1;
 uniform sampler2D uMaskTexture0;
 uniform sampler2D uMaskTexture1;
 uniform sampler2D uDestTexture;
@@ -95,7 +95,7 @@ uniform int uCtrl;
 in vec3 vMaskTexCoord0;
 in vec3 vMaskTexCoord1;
 in vec2 vColorTexCoord0;
-in vec2 vColorTexCoord1;
+in vec4 vBaseColor;
 
 out vec4 oFragColor;
 
@@ -103,6 +103,18 @@ out vec4 oFragColor;
 
 vec4 sampleColor(sampler2D colorTexture, vec2 colorTexCoord){
     return texture(colorTexture, colorTexCoord);
+}
+
+
+
+vec4 combineColor0(vec4 destColor, vec4 srcColor, int op){
+    switch(op){
+    case 0x1 :
+        return vec4(srcColor . rgb, srcColor . a * destColor . a);
+    case 0x2 :
+        return vec4(destColor . rgb, srcColor . a * destColor . a);
+    }
+    return destColor;
 }
 
 
@@ -313,10 +325,10 @@ vec4 filterRadialGradient(vec2 colorTexCoord,
     vec4 color = vec4(0.0);
     if(abs(discrim)>= 0.00001){
         vec2 ts = vec2(sqrt(discrim)* vec2(1.0, - 1.0)+ vec2(b))/ vec2(a);
-        float tMax = max(ts . x, ts . y);
-        float t = tMax <= 1.0 ? tMax : min(ts . x, ts . y);
-        if(t >= 0.0)
-            color = texture(colorTexture, uvOrigin + vec2(t, 0.0));
+        if(ts . x > ts . y)
+            ts = ts . yx;
+        float t = ts . x >= 0.0 ? ts . x : ts . y;
+        color = texture(colorTexture, uvOrigin + vec2(clamp(t, 0.0, 1.0), 0.0));
     }
 
     return color;
@@ -560,23 +572,23 @@ void calculateColor(int ctrl){
     maskAlpha = sampleMask(maskAlpha, uMaskTexture1, vMaskTexCoord1, maskCtrl1);
 
 
-    vec4 color = vec4(0.0);
-    if(((ctrl >> 6)& 0x1)!= 0){
-        int color0Filter =(ctrl >> 4)&
-                                    0x3;
-        color += filterColor(vColorTexCoord0,
-                             uColorTexture0,
-                             uGammaLUT,
-                             uColorTexture0Size,
-                             gl_FragCoord . xy,
-                             uFramebufferSize,
-                             uFilterParams0,
-                             uFilterParams1,
-                             uFilterParams2,
-                             color0Filter);
+    vec4 color = vBaseColor;
+    int color0Combine =(ctrl >> 6)&
+                                       0x3;
+    if(color0Combine != 0){
+        int color0Filter =(ctrl >> 4)& 0x3;
+        vec4 color0 = filterColor(vColorTexCoord0,
+                                  uColorTexture0,
+                                  uGammaLUT,
+                                  uColorTexture0Size,
+                                  gl_FragCoord . xy,
+                                  uFramebufferSize,
+                                  uFilterParams0,
+                                  uFilterParams1,
+                                  uFilterParams2,
+                                  color0Filter);
+        color = combineColor0(color, color0, color0Combine);
     }
-    if(((ctrl >> 7)& 0x1)!= 0)
-        color *= sampleColor(uColorTexture1, vColorTexCoord1);
 
 
     color . a *= maskAlpha;

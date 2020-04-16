@@ -11,12 +11,14 @@
 //! Packed data ready to be sent to the GPU.
 
 use crate::options::BoundingQuad;
+use crate::paint::PaintCompositeOp;
 use pathfinder_color::ColorU;
-use pathfinder_content::effects::{BlendMode, Effects};
+use pathfinder_content::effects::{BlendMode, Filter};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_geometry::line_segment::{LineSegmentU4, LineSegmentU8};
 use pathfinder_geometry::rect::RectI;
+use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::Vector2I;
 use pathfinder_gpu::TextureSamplingFlags;
 use std::fmt::{Debug, Formatter, Result as DebugResult};
@@ -50,8 +52,11 @@ pub enum RenderCommand {
     // TODO(pcwalton): Add a rect to this so we can render to subrects of a page.
     DeclareRenderTarget { id: RenderTargetId, location: TextureLocation },
 
+    // Upload texture metadata.
+    UploadTextureMetadata(Vec<TextureMetadataEntry>),
+
     // Adds fills to the queue.
-    AddFills(Vec<FillBatchPrimitive>),
+    AddFills(Vec<FillBatchEntry>),
 
     // Flushes the queue of fills.
     FlushFills,
@@ -63,14 +68,17 @@ pub enum RenderCommand {
     // Pops a render target from the stack.
     PopRenderTarget,
 
+    // Marks that tile compositing is about to begin.
+    BeginTileDrawing,
+
     // Draws a batch of tiles to the render target on top of the stack.
     DrawTiles(TileBatch),
 
     // Presents a rendered frame.
-    Finish { build_time: Duration },
+    Finish { cpu_build_time: Duration },
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct TexturePageId(pub u32);
 
 #[derive(Clone, Debug)]
@@ -78,7 +86,7 @@ pub struct TexturePageDescriptor {
     pub size: Vector2I,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct TextureLocation {
     pub page: TexturePageId,
     pub rect: RectI,
@@ -87,18 +95,19 @@ pub struct TextureLocation {
 #[derive(Clone, Debug)]
 pub struct TileBatch {
     pub tiles: Vec<Tile>,
-    pub color_texture_0: Option<TileBatchTexture>,
-    pub color_texture_1: Option<TileBatchTexture>,
+    pub color_texture: Option<TileBatchTexture>,
     pub mask_0_fill_rule: Option<FillRule>,
     pub mask_1_fill_rule: Option<FillRule>,
+    pub filter: Filter,
     pub blend_mode: BlendMode,
-    pub effects: Effects,
+    pub tile_page: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TileBatchTexture {
     pub page: TexturePageId,
     pub sampling_flags: TextureSamplingFlags,
+    pub composite_op: PaintCompositeOp,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -112,15 +121,27 @@ pub struct FillObjectPrimitive {
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct TileObjectPrimitive {
-    /// If `u16::MAX`, then this is a solid tile.
-    pub alpha_tile_index: u16,
+    pub alpha_tile_id: AlphaTileId,
     pub backdrop: i8,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct TextureMetadataEntry {
+    pub color_0_transform: Transform2F,
+    pub base_color: ColorU,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FillBatchEntry {
+    pub fill: Fill,
+    pub page: u16,
 }
 
 // FIXME(pcwalton): Move `subpx` before `px` and remove `repr(packed)`.
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(packed)]
-pub struct FillBatchPrimitive {
+pub struct Fill {
     pub px: LineSegmentU4,
     pub subpx: LineSegmentU8,
     pub alpha_tile_index: u16,
@@ -129,27 +150,40 @@ pub struct FillBatchPrimitive {
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct Tile {
-    pub upper_left: TileVertex,
-    pub upper_right: TileVertex,
-    pub lower_left: TileVertex,
-    pub lower_right: TileVertex,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-#[repr(C)]
-pub struct TileVertex {
     pub tile_x: i16,
     pub tile_y: i16,
-    pub color_0_u: f32,
-    pub color_0_v: f32,
-    pub color_1_u: f32,
-    pub color_1_v: f32,
-    pub mask_0_u: f32,
-    pub mask_0_v: f32,
-    pub mask_1_u: f32,
-    pub mask_1_v: f32,
-    pub mask_0_backdrop: i16,
-    pub mask_1_backdrop: i16,
+    pub mask_0_u: u8,
+    pub mask_0_v: u8,
+    pub mask_1_u: u8,
+    pub mask_1_v: u8,
+    pub mask_0_backdrop: i8,
+    pub mask_1_backdrop: i8,
+    pub color: u16,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct AlphaTileId(pub u32);
+
+impl AlphaTileId {
+    #[inline]
+    pub fn invalid() -> AlphaTileId {
+        AlphaTileId(!0)
+    }
+
+    #[inline]
+    pub fn page(self) -> u16 {
+        (self.0 >> 16) as u16
+    }
+
+    #[inline]
+    pub fn tile(self) -> u16 {
+        (self.0 & 0xffff) as u16
+    }
+
+    #[inline]
+    pub fn is_valid(self) -> bool {
+        self.0 < !0
+    }
 }
 
 impl Debug for RenderCommand {
@@ -165,22 +199,29 @@ impl Debug for RenderCommand {
             RenderCommand::DeclareRenderTarget { id, location } => {
                 write!(formatter, "DeclareRenderTarget({:?}, {:?})", id, location)
             }
-            RenderCommand::AddFills(ref fills) => write!(formatter, "AddFills(x{})", fills.len()),
+            RenderCommand::UploadTextureMetadata(ref metadata) => {
+                write!(formatter, "UploadTextureMetadata(x{})", metadata.len())
+            }
+            RenderCommand::AddFills(ref fills) => {
+                write!(formatter, "AddFills(x{})", fills.len())
+            }
             RenderCommand::FlushFills => write!(formatter, "FlushFills"),
             RenderCommand::PushRenderTarget(render_target_id) => {
                 write!(formatter, "PushRenderTarget({:?})", render_target_id)
             }
             RenderCommand::PopRenderTarget => write!(formatter, "PopRenderTarget"),
+            RenderCommand::BeginTileDrawing => write!(formatter, "BeginTileDrawing"),
             RenderCommand::DrawTiles(ref batch) => {
                 write!(formatter,
-                       "DrawTiles(x{}, C0 {:?}, C1 {:?}, M0 {:?}, {:?})",
+                       "DrawTiles(x{}, C0 {:?}, M0 {:?}, {:?})",
                        batch.tiles.len(),
-                       batch.color_texture_0,
-                       batch.color_texture_1,
+                       batch.color_texture,
                        batch.mask_0_fill_rule,
                        batch.blend_mode)
             }
-            RenderCommand::Finish { .. } => write!(formatter, "Finish"),
+            RenderCommand::Finish { cpu_build_time } => {
+                write!(formatter, "Finish({} ms)", cpu_build_time.as_secs_f64() * 1000.0)
+            }
         }
     }
 }

@@ -9,8 +9,8 @@
 // except according to those terms.
 
 use crate::builder::{BuiltPath, ObjectBuilder, Occluder, SceneBuilder, SolidTiles};
-use crate::gpu_data::TileObjectPrimitive;
-use crate::paint::PaintMetadata;
+use crate::gpu_data::{AlphaTileId, TileObjectPrimitive};
+use crate::paint::{PaintId, PaintMetadata};
 use crate::options::RenderCommandListener;
 use pathfinder_content::effects::BlendMode;
 use pathfinder_content::fill::FillRule;
@@ -19,7 +19,6 @@ use pathfinder_content::segment::Segment;
 use pathfinder_content::sorted_vector::SortedVector;
 use pathfinder_geometry::line_segment::LineSegment2F;
 use pathfinder_geometry::rect::{RectF, RectI};
-use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::{Vector2F, Vector2I, vec2f, vec2i};
 use std::cmp::Ordering;
 use std::mem;
@@ -49,10 +48,9 @@ pub(crate) enum TilingPathInfo<'a> {
 
 #[derive(Clone, Copy)]
 pub(crate) struct DrawTilingPathInfo<'a> {
+    pub(crate) paint_id: PaintId,
     pub(crate) paint_metadata: &'a PaintMetadata,
-    pub(crate) opacity_tile_transform: Transform2F,
     pub(crate) blend_mode: BlendMode,
-    pub(crate) opacity: u8,
     pub(crate) built_clip_path: Option<&'a BuiltPath>,
 }
 
@@ -154,10 +152,12 @@ impl<'a, L: RenderCommandListener> Tiler<'a, L> {
                     }
                 }
                 TileType::SingleMask => {
+                    debug_assert_ne!(packed_tile.draw_tile.alpha_tile_id.page(), !0);
                     packed_tile.add_to(&mut self.object_builder.built_path.single_mask_tiles,
                                        &draw_tiling_path_info);
                 }
                 TileType::DualMask => {
+                    debug_assert_ne!(packed_tile.draw_tile.alpha_tile_id.page(), !0);
                     packed_tile.add_to(&mut self.object_builder.built_path.dual_mask_tiles,
                                        &draw_tiling_path_info);
                 }
@@ -416,6 +416,30 @@ impl<'a> PackedTile<'a> {
            -> PackedTile<'a> {
         let tile_coords = object_builder.local_tile_index_to_coords(draw_tile_index as u32);
 
+        // First, if the draw tile is empty, cull it regardless of clip.
+        if draw_tile.is_solid() {
+            match (object_builder.built_path.fill_rule, draw_tile.backdrop) {
+                (FillRule::Winding, 0) => {
+                    return PackedTile {
+                        tile_type: TileType::Empty,
+                        tile_coords,
+                        draw_tile,
+                        clip_tile: None,
+                    };
+                }
+                (FillRule::Winding, _) => {}
+                (FillRule::EvenOdd, backdrop) if backdrop % 2 == 0 => {
+                    return PackedTile {
+                        tile_type: TileType::Empty,
+                        tile_coords,
+                        draw_tile,
+                        clip_tile: None,
+                    };
+                }
+                (FillRule::EvenOdd, _) => {}
+            }
+        }
+
         // Figure out what clip tile we need, if any.
         let clip_tile = match draw_tiling_path_info.built_clip_path {
             None => None,
@@ -451,51 +475,43 @@ impl<'a> PackedTile<'a> {
             }
         };
 
-        if clip_tile.is_none() {
-            if draw_tile.is_solid() {
-                // This is the simple case of a solid tile with no clip, so there are optimization
-                // opportunities. First, tiles that must be blank per the fill rule are always
-                // skipped.
-                match (object_builder.built_path.fill_rule, draw_tile.backdrop) {
-                    (FillRule::Winding, 0) => {
-                        return PackedTile {
-                            tile_type: TileType::Empty,
-                            tile_coords,
-                            draw_tile,
-                            clip_tile,
-                        };
-                    }
-                    (FillRule::Winding, _) => {}
-                    (FillRule::EvenOdd, backdrop) if backdrop % 2 == 0 => {
-                        return PackedTile {
-                            tile_type: TileType::Empty,
-                            tile_coords,
-                            draw_tile,
-                            clip_tile,
-                        };
-                    }
-                    (FillRule::EvenOdd, _) => {}
-                }
-
-                // Next, if this is a solid tile that completely occludes the background, record
-                // that fact. Otherwise, add a regular solid tile.
-                return PackedTile {
-                    tile_type: TileType::Solid,
+        // Choose a tile type.
+        match clip_tile {
+            None if draw_tile.is_solid() => {
+                // This is a solid tile that completely occludes the background.
+                PackedTile { tile_type: TileType::Solid, tile_coords, draw_tile, clip_tile }
+            }
+            None => {
+                // We have a draw tile and no clip tile.
+                PackedTile {
+                    tile_type: TileType::SingleMask,
                     tile_coords,
                     draw_tile,
-                    clip_tile,
-                };
+                    clip_tile: None,
+                }
             }
-
-            return PackedTile {
-                tile_type: TileType::SingleMask,
-                tile_coords,
-                draw_tile,
-                clip_tile,
-            };
+            Some(clip_tile) if draw_tile.is_solid() => {
+                // We have a solid draw tile and a clip tile. This is effectively the same as
+                // having a draw tile and no clip tile.
+                //
+                // FIXME(pcwalton): This doesn't preserve the fill rule of the clip path!
+                PackedTile {
+                    tile_type: TileType::SingleMask,
+                    tile_coords,
+                    draw_tile: clip_tile,
+                    clip_tile: None,
+                }
+            }
+            Some(clip_tile) => {
+                // We have both a draw and clip mask. Composite them together.
+                PackedTile {
+                    tile_type: TileType::DualMask,
+                    tile_coords,
+                    draw_tile,
+                    clip_tile: Some(clip_tile),
+                }
+            }
         }
-
-        PackedTile { tile_type: TileType::DualMask, tile_coords, draw_tile, clip_tile }
     }
 }
 
@@ -674,11 +690,11 @@ impl PartialOrd<ActiveEdge> for ActiveEdge {
 impl Default for TileObjectPrimitive {
     #[inline]
     fn default() -> TileObjectPrimitive {
-        TileObjectPrimitive { backdrop: 0, alpha_tile_index: !0 }
+        TileObjectPrimitive { backdrop: 0, alpha_tile_id: AlphaTileId::invalid() }
     }
 }
 
 impl TileObjectPrimitive {
     #[inline]
-    pub fn is_solid(&self) -> bool { self.alpha_tile_index == !0 }
+    pub fn is_solid(&self) -> bool { !self.alpha_tile_id.is_valid() }
 }

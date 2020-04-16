@@ -12,7 +12,7 @@
 
 use pathfinder_simd::default::{F32x2, F32x4, I32x2};
 use std::hash::{Hash, Hasher};
-use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub};
+use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 /// 2D points with 32-bit floating point coordinates.
 #[derive(Clone, Copy, Debug, Default)]
@@ -208,6 +208,13 @@ impl Sub<f32> for Vector2F {
     }
 }
 
+impl SubAssign<Vector2F> for Vector2F {
+    #[inline]
+    fn sub_assign(&mut self, other: Vector2F) {
+        *self = *self - other
+    }
+}
+
 impl Mul<Vector2F> for Vector2F {
     type Output = Vector2F;
     #[inline]
@@ -243,6 +250,14 @@ impl Div<Vector2F> for Vector2F {
     #[inline]
     fn div(self, other: Vector2F) -> Vector2F {
         Vector2F(self.0 / other.0)
+    }
+}
+
+impl Div<f32> for Vector2F {
+    type Output = Vector2F;
+    #[inline]
+    fn div(self, other: f32) -> Vector2F {
+        self / Vector2F::splat(other)
     }
 }
 

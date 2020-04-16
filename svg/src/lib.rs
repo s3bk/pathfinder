@@ -230,14 +230,16 @@ impl BuiltSVG {
                       opacity: Opacity,
                       fill_rule: UsvgFillRule) {
         outline.transform(&state.transform);
-        let paint = Paint::from_svg_paint(paint, &state.transform, &mut self.result_flags);
+        let paint = Paint::from_svg_paint(paint,
+                                          &state.transform,
+                                          opacity,
+                                          &mut self.result_flags);
         let style = self.scene.push_paint(&paint);
         let fill_rule = FillRule::from_usvg_fill_rule(fill_rule);
         let mut path = DrawPath::new(outline, style);
         path.set_clip_path(state.clip_path);
         path.set_fill_rule(fill_rule);
         path.set_name(name);
-        path.set_opacity((opacity.value() * 255.0) as u8);
         self.scene.push_path(path);
     }
 }
@@ -287,6 +289,7 @@ impl Display for BuildResultFlags {
 trait PaintExt {
     fn from_svg_paint(svg_paint: &UsvgPaint,
                       transform: &Transform2F,
+                      opacity: Opacity,
                       result_flags: &mut BuildResultFlags)
                       -> Self;
 }
@@ -295,10 +298,11 @@ impl PaintExt for Paint {
     #[inline]
     fn from_svg_paint(svg_paint: &UsvgPaint,
                       transform: &Transform2F,
+                      opacity: Opacity,
                       result_flags: &mut BuildResultFlags)
                       -> Paint {
         // TODO(pcwalton): Support gradients.
-        let mut paint = Paint::Color(match *svg_paint {
+        let mut paint = Paint::from_color(match *svg_paint {
             UsvgPaint::Color(color) => ColorU::from_svg_color(color),
             UsvgPaint::Link(_) => {
                 // TODO(pcwalton)
@@ -307,6 +311,11 @@ impl PaintExt for Paint {
             }
         });
         paint.apply_transform(transform);
+
+        let mut base_color = paint.base_color().to_f32();
+        base_color.set_a(base_color.a() * opacity.value() as f32);
+        paint.set_base_color(base_color.to_u8());
+
         paint
     }
 }

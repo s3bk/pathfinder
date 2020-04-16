@@ -16,25 +16,29 @@ use crate::gpu::shaders::{BlitProgram, BlitVertexArray, CopyTileProgram, CopyTil
 use crate::gpu::shaders::{FillProgram, FillVertexArray, MAX_FILLS_PER_BATCH, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TileProgram, TileVertexArray};
-use crate::gpu_data::{FillBatchPrimitive, RenderCommand, TextureLocation, TexturePageDescriptor};
-use crate::gpu_data::{TexturePageId, Tile, TileBatchTexture};
+use crate::gpu_data::{Fill, FillBatchEntry, RenderCommand, TextureLocation};
+use crate::gpu_data::{TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
+use crate::gpu_data::{Tile, TileBatchTexture};
 use crate::options::BoundingQuad;
+use crate::paint::PaintCompositeOp;
 use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
+use half::f16;
 use pathfinder_color::{self as color, ColorF, ColorU};
-use pathfinder_content::effects::{BlendMode, BlurDirection, DefringingKernel, Effects, Filter};
+use pathfinder_content::effects::{BlendMode, BlurDirection, DefringingKernel};
+use pathfinder_content::effects::{Filter, PatternFilter};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_geometry::line_segment::LineSegment2F;
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::transform3d::Transform4F;
+use pathfinder_geometry::util;
 use pathfinder_geometry::vector::{Vector2F, Vector2I, Vector4F, vec2f, vec2i};
 use pathfinder_gpu::{BlendFactor, BlendState, BufferData, BufferTarget, BufferUploadMode};
 use pathfinder_gpu::{ClearOps, DepthFunc, DepthState, Device, Primitive, RenderOptions};
 use pathfinder_gpu::{RenderState, RenderTarget, StencilFunc, StencilState, TextureDataRef};
 use pathfinder_gpu::{TextureFormat, UniformData};
 use pathfinder_resources::ResourceLoader;
-use pathfinder_simd::default::{F32x2, F32x4};
-use std::cmp;
+use pathfinder_simd::default::{F32x2, F32x4, I32x2};
 use std::collections::VecDeque;
 use std::f32;
 use std::mem;
@@ -52,43 +56,48 @@ pub(crate) const MASK_TILES_DOWN: u32 = 256;
 const SQRT_2_PI_INV: f32 = 0.3989422804014327;
 
 const TEXTURE_CACHE_SIZE: usize = 8;
+const TIMER_QUERY_CACHE_SIZE: usize = 8;
+
+const TEXTURE_METADATA_ENTRIES_PER_ROW: i32 = 128;
+const TEXTURE_METADATA_TEXTURE_WIDTH:   i32 = TEXTURE_METADATA_ENTRIES_PER_ROW * 4;
+const TEXTURE_METADATA_TEXTURE_HEIGHT:  i32 = 65536 / TEXTURE_METADATA_ENTRIES_PER_ROW;
 
 // FIXME(pcwalton): Shrink this again!
 const MASK_FRAMEBUFFER_WIDTH:  i32 = TILE_WIDTH as i32  * MASK_TILES_ACROSS as i32;
 const MASK_FRAMEBUFFER_HEIGHT: i32 = TILE_HEIGHT as i32 * MASK_TILES_DOWN as i32;
 
-const COMBINER_CTRL_MASK_WINDING: i32 =            0x1;
-const COMBINER_CTRL_MASK_EVEN_ODD: i32 =           0x2;
+const COMBINER_CTRL_MASK_WINDING: i32 =             0x1;
+const COMBINER_CTRL_MASK_EVEN_ODD: i32 =            0x2;
 
-const COMBINER_CTRL_COLOR_ENABLE_MASK: i32 =       0x1;
+const COMBINER_CTRL_COLOR_COMBINE_SRC_IN: i32 =     0x1;
+const COMBINER_CTRL_COLOR_COMBINE_DEST_IN: i32 =    0x2;
 
-const COMBINER_CTRL_FILTER_RADIAL_GRADIENT: i32 =  0x1;
-const COMBINER_CTRL_FILTER_TEXT: i32 =             0x2;
-const COMBINER_CTRL_FILTER_BLUR: i32 =             0x3;
+const COMBINER_CTRL_FILTER_RADIAL_GRADIENT: i32 =   0x1;
+const COMBINER_CTRL_FILTER_TEXT: i32 =              0x2;
+const COMBINER_CTRL_FILTER_BLUR: i32 =              0x3;
 
-const COMBINER_CTRL_COMPOSITE_NORMAL: i32 =       0x0;
-const COMBINER_CTRL_COMPOSITE_MULTIPLY: i32 =     0x1;
-const COMBINER_CTRL_COMPOSITE_SCREEN: i32 =       0x2;
-const COMBINER_CTRL_COMPOSITE_OVERLAY: i32 =      0x3;
-const COMBINER_CTRL_COMPOSITE_DARKEN: i32 =       0x4;
-const COMBINER_CTRL_COMPOSITE_LIGHTEN: i32 =      0x5;
-const COMBINER_CTRL_COMPOSITE_COLOR_DODGE: i32 =  0x6;
-const COMBINER_CTRL_COMPOSITE_COLOR_BURN: i32 =   0x7;
-const COMBINER_CTRL_COMPOSITE_HARD_LIGHT: i32 =   0x8;
-const COMBINER_CTRL_COMPOSITE_SOFT_LIGHT: i32 =   0x9;
-const COMBINER_CTRL_COMPOSITE_DIFFERENCE: i32 =   0xa;
-const COMBINER_CTRL_COMPOSITE_EXCLUSION: i32 =    0xb;
-const COMBINER_CTRL_COMPOSITE_HUE: i32 =          0xc;
-const COMBINER_CTRL_COMPOSITE_SATURATION: i32 =   0xd;
-const COMBINER_CTRL_COMPOSITE_COLOR: i32 =        0xe;
-const COMBINER_CTRL_COMPOSITE_LUMINOSITY: i32 =   0xf;
+const COMBINER_CTRL_COMPOSITE_NORMAL: i32 =         0x0;
+const COMBINER_CTRL_COMPOSITE_MULTIPLY: i32 =       0x1;
+const COMBINER_CTRL_COMPOSITE_SCREEN: i32 =         0x2;
+const COMBINER_CTRL_COMPOSITE_OVERLAY: i32 =        0x3;
+const COMBINER_CTRL_COMPOSITE_DARKEN: i32 =         0x4;
+const COMBINER_CTRL_COMPOSITE_LIGHTEN: i32 =        0x5;
+const COMBINER_CTRL_COMPOSITE_COLOR_DODGE: i32 =    0x6;
+const COMBINER_CTRL_COMPOSITE_COLOR_BURN: i32 =     0x7;
+const COMBINER_CTRL_COMPOSITE_HARD_LIGHT: i32 =     0x8;
+const COMBINER_CTRL_COMPOSITE_SOFT_LIGHT: i32 =     0x9;
+const COMBINER_CTRL_COMPOSITE_DIFFERENCE: i32 =     0xa;
+const COMBINER_CTRL_COMPOSITE_EXCLUSION: i32 =      0xb;
+const COMBINER_CTRL_COMPOSITE_HUE: i32 =            0xc;
+const COMBINER_CTRL_COMPOSITE_SATURATION: i32 =     0xd;
+const COMBINER_CTRL_COMPOSITE_COLOR: i32 =          0xe;
+const COMBINER_CTRL_COMPOSITE_LUMINOSITY: i32 =     0xf;
 
-const COMBINER_CTRL_MASK_0_SHIFT: i32 =              0;
-const COMBINER_CTRL_MASK_1_SHIFT: i32 =              2;
-const COMBINER_CTRL_COLOR_0_FILTER_SHIFT: i32 =      4;
-const COMBINER_CTRL_COLOR_0_ENABLE_SHIFT: i32 =      6;
-const COMBINER_CTRL_COLOR_1_ENABLE_SHIFT: i32 =      7;
-const COMBINER_CTRL_COMPOSITE_SHIFT: i32 =           8;
+const COMBINER_CTRL_MASK_0_SHIFT: i32 =             0;
+const COMBINER_CTRL_MASK_1_SHIFT: i32 =             2;
+const COMBINER_CTRL_COLOR_FILTER_SHIFT: i32 =       4;
+const COMBINER_CTRL_COLOR_COMBINE_SHIFT: i32 =      6;
+const COMBINER_CTRL_COMPOSITE_SHIFT: i32 =          8;
 
 pub struct Renderer<D>
 where
@@ -107,20 +116,20 @@ where
     blit_vertex_array: BlitVertexArray<D>,
     tile_vertex_array: TileVertexArray<D>,
     tile_copy_vertex_array: CopyTileVertexArray<D>,
-    area_lut_texture: D::Texture,
     tile_vertex_buffer: D::Buffer,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_length: usize,
     fill_vertex_array: FillVertexArray<D>,
-    fill_framebuffer: D::Framebuffer,
+    alpha_tile_pages: Vec<AlphaTilePage<D>>,
     dest_blend_framebuffer: D::Framebuffer,
     intermediate_dest_framebuffer: D::Framebuffer,
     texture_pages: Vec<TexturePage<D>>,
     render_targets: Vec<RenderTargetInfo>,
     render_target_stack: Vec<RenderTargetId>,
-
+    texture_metadata_texture: D::Texture,
+    area_lut_texture: D::Texture,
     gamma_lut_texture: D::Texture,
 
     // Stencil shader
@@ -133,13 +142,13 @@ where
 
     // Rendering state
     framebuffer_flags: FramebufferFlags,
-    buffered_fills: Vec<FillBatchPrimitive>,
     texture_cache: TextureCache<D>,
 
     // Debug
     pub stats: RenderStats,
-    current_timers: RenderTimers<D>,
-    pending_timers: VecDeque<RenderTimers<D>>,
+    current_cpu_build_time: Option<Duration>,
+    current_timer: Option<D::TimerQuery>,
+    pending_timers: VecDeque<PendingTimer<D>>,
     free_timer_queries: Vec<D::TimerQuery>,
 
     #[cfg(feature="debug_ui")]
@@ -167,6 +176,10 @@ where
 
         let area_lut_texture = device.create_texture_from_png(resources, "lut/area");
         let gamma_lut_texture = device.create_texture_from_png(resources, "lut/gamma");
+
+        let texture_metadata_texture = device.create_texture(
+            TextureFormat::RGBA16F,
+            Vector2I::new(TEXTURE_METADATA_TEXTURE_WIDTH, TEXTURE_METADATA_TEXTURE_HEIGHT));
 
         let quad_vertex_positions_buffer = device.create_buffer();
         device.allocate_buffer(
@@ -201,7 +214,8 @@ where
             &device,
             &tile_program,
             &tile_vertex_buffer,
-            &quads_vertex_indices_buffer,
+            &quad_vertex_positions_buffer,
+            &quad_vertex_indices_buffer,
         );
         let tile_copy_vertex_array = CopyTileVertexArray::new(
             &device,
@@ -217,16 +231,16 @@ where
             &quad_vertex_indices_buffer,
         );
 
-        let fill_framebuffer_size = vec2i(MASK_FRAMEBUFFER_WIDTH, MASK_FRAMEBUFFER_HEIGHT);
-        let fill_framebuffer_texture =
-            device.create_texture(TextureFormat::R16F, fill_framebuffer_size);
-        let fill_framebuffer = device.create_framebuffer(fill_framebuffer_texture);
-
         let window_size = dest_framebuffer.window_size(&device);
         let dest_blend_texture = device.create_texture(TextureFormat::RGBA8, window_size);
         let dest_blend_framebuffer = device.create_framebuffer(dest_blend_texture);
         let intermediate_dest_texture = device.create_texture(TextureFormat::RGBA8, window_size);
         let intermediate_dest_framebuffer = device.create_framebuffer(intermediate_dest_texture);
+
+        let mut timer_queries = vec![];
+        for _ in 0..TIMER_QUERY_CACHE_SIZE {
+            timer_queries.push(device.create_timer_query());
+        }
 
         #[cfg(feature="debug_ui")]
         let debug_ui_presenter = DebugUIPresenter::new(&device, resources, window_size);
@@ -243,21 +257,22 @@ where
             blit_vertex_array,
             tile_vertex_array,
             tile_copy_vertex_array,
-            area_lut_texture,
             tile_vertex_buffer,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
             quads_vertex_indices_buffer,
             quads_vertex_indices_length: 0,
             fill_vertex_array,
-            fill_framebuffer,
+            alpha_tile_pages: vec![],
             dest_blend_framebuffer,
             intermediate_dest_framebuffer,
             texture_pages: vec![],
             render_targets: vec![],
             render_target_stack: vec![],
 
+            area_lut_texture,
             gamma_lut_texture,
+            texture_metadata_texture,
 
             stencil_program,
             stencil_vertex_array,
@@ -266,15 +281,14 @@ where
             reprojection_vertex_array,
 
             stats: RenderStats::default(),
-            current_timers: RenderTimers::new(),
+            current_cpu_build_time: None,
+            current_timer: None,
             pending_timers: VecDeque::new(),
-            free_timer_queries: vec![],
-
+            free_timer_queries: timer_queries,
             #[cfg(feature="debug_ui")]
             debug_ui_presenter,
 
             framebuffer_flags: FramebufferFlags::empty(),
-            buffered_fills: vec![],
             texture_cache: TextureCache::new(),
 
             flags: RendererFlags::empty(),
@@ -283,6 +297,10 @@ where
 
     pub fn begin_scene(&mut self) {
         self.framebuffer_flags = FramebufferFlags::empty();
+        for alpha_tile_page in &mut self.alpha_tile_pages {
+            alpha_tile_page.must_preserve_framebuffer = false;
+        }
+
         self.device.begin_commands();
         self.stats = RenderStats::default();
     }
@@ -301,11 +319,16 @@ where
             RenderCommand::DeclareRenderTarget { id, location } => {
                 self.declare_render_target(id, location)
             }
+            RenderCommand::UploadTextureMetadata(ref metadata) => {
+                self.upload_texture_metadata(metadata)
+            }
             RenderCommand::AddFills(ref fills) => self.add_fills(fills),
             RenderCommand::FlushFills => {
-                self.draw_buffered_fills();
-                self.begin_composite_timer_query();
+                for page_index in 0..(self.alpha_tile_pages.len() as u16) {
+                    self.draw_buffered_fills(page_index)
+                }
             }
+            RenderCommand::BeginTileDrawing => self.begin_tile_drawing(),
             RenderCommand::PushRenderTarget(render_target_id) => {
                 self.push_render_target(render_target_id)
             }
@@ -314,25 +337,37 @@ where
                 let count = batch.tiles.len();
                 self.stats.alpha_tile_count += count;
                 self.upload_tiles(&batch.tiles);
-                self.draw_tiles(count as u32,
-                                batch.color_texture_0,
-                                batch.color_texture_1,
+                self.draw_tiles(batch.tile_page,
+                                count as u32,
+                                batch.color_texture,
                                 batch.mask_0_fill_rule,
                                 batch.mask_1_fill_rule,
                                 batch.blend_mode,
-                                batch.effects)
+                                batch.filter)
             }
-            RenderCommand::Finish { .. } => {}
+            RenderCommand::Finish { cpu_build_time } => self.stats.cpu_build_time = cpu_build_time,
+        }
+    }
+
+    fn begin_tile_drawing(&mut self) {
+        if let Some(timer_query) = self.allocate_timer_query() {
+            self.device.begin_timer_query(&timer_query);
+            self.current_timer = Some(timer_query);
         }
     }
 
     pub fn end_scene(&mut self) {
         self.blit_intermediate_dest_framebuffer_if_necessary();
 
-        self.end_composite_timer_query();
-        self.pending_timers.push_back(mem::replace(&mut self.current_timers, RenderTimers::new()));
-
         self.device.end_commands();
+
+        if let Some(timer_query) = self.current_timer.take() {
+            self.device.end_timer_query(&timer_query);
+            self.pending_timers.push_back(PendingTimer {
+                gpu_timer_query: timer_query,
+            });
+        }
+        self.current_cpu_build_time = None;
     }
 
     fn start_rendering(&mut self,
@@ -358,32 +393,15 @@ where
     }
 
     pub fn shift_rendering_time(&mut self) -> Option<RenderTime> {
-        let timers = self.pending_timers.front()?;
-
-        // Accumulate stage-0 time.
-        let mut total_stage_0_time = Duration::new(0, 0);
-        for timer_query in &timers.stage_0 {
-            match self.device.try_recv_timer_query(timer_query) {
-                None => return None,
-                Some(stage_0_time) => total_stage_0_time += stage_0_time,
+        if let Some(pending_timer) = self.pending_timers.pop_front() {
+            if let Some(gpu_time) =
+                    self.device.try_recv_timer_query(&pending_timer.gpu_timer_query) {
+                self.free_timer_queries.push(pending_timer.gpu_timer_query);
+                return Some(RenderTime { gpu_time });
             }
+            self.pending_timers.push_front(pending_timer);
         }
-
-        // Get stage-1 time.
-        let stage_1_time = {
-            let stage_1_timer_query = timers.stage_1.as_ref().unwrap();
-            match self.device.try_recv_timer_query(stage_1_timer_query) {
-                None => return None,
-                Some(query) => query,
-            }
-        };
-
-        // Recycle all timer queries.
-        let timers = self.pending_timers.pop_front().unwrap();
-        self.free_timer_queries.extend(timers.stage_0.into_iter());
-        self.free_timer_queries.push(timers.stage_1.unwrap());
-
-        Some(RenderTime { stage_0: total_stage_0_time, stage_1: stage_1_time })
+        None
     }
 
     #[inline]
@@ -472,6 +490,43 @@ where
         render_target.location = location;
     }
 
+    fn upload_texture_metadata(&mut self, metadata: &[TextureMetadataEntry]) {
+        let padded_texel_size =
+            (util::alignup_i32(metadata.len() as i32, TEXTURE_METADATA_ENTRIES_PER_ROW) *
+             TEXTURE_METADATA_TEXTURE_WIDTH * 4) as usize;
+        let mut texels = Vec::with_capacity(padded_texel_size);
+        for entry in metadata {
+            let base_color = entry.base_color.to_f32();
+            texels.extend_from_slice(&[
+                f16::from_f32(entry.color_0_transform.m11()),
+                f16::from_f32(entry.color_0_transform.m21()),
+                f16::from_f32(entry.color_0_transform.m12()),
+                f16::from_f32(entry.color_0_transform.m22()),
+                f16::from_f32(entry.color_0_transform.m31()),
+                f16::from_f32(entry.color_0_transform.m32()),
+                f16::default(),
+                f16::default(),
+                f16::from_f32(base_color.r()),
+                f16::from_f32(base_color.g()),
+                f16::from_f32(base_color.b()),
+                f16::from_f32(base_color.a()),
+                f16::default(),
+                f16::default(),
+                f16::default(),
+                f16::default(),
+            ]);
+        }
+        while texels.len() < padded_texel_size {
+            texels.push(f16::default())
+        }
+
+        let texture = &mut self.texture_metadata_texture;
+        let width = TEXTURE_METADATA_TEXTURE_WIDTH;
+        let height = texels.len() as i32 / (4 * TEXTURE_METADATA_TEXTURE_WIDTH);
+        let rect = RectI::new(Vector2I::zero(), Vector2I::new(width, height));
+        self.device.upload_to_texture(texture, rect, TextureDataRef::F16(&texels));
+    }
+
     fn upload_tiles(&mut self, tiles: &[Tile]) {
         self.device.allocate_buffer(&self.tile_vertex_buffer,
                                     BufferData::Memory(&tiles),
@@ -505,47 +560,49 @@ where
         self.quads_vertex_indices_length = length;
     }
 
-    fn add_fills(&mut self, mut fills: &[FillBatchPrimitive]) {
-        if fills.is_empty() {
+    fn add_fills(&mut self, fill_batch: &[FillBatchEntry]) {
+        if fill_batch.is_empty() {
             return;
         }
 
-        self.stats.fill_count += fills.len();
+        self.stats.fill_count += fill_batch.len();
 
-        while !fills.is_empty() {
-            let count = cmp::min(fills.len(), MAX_FILLS_PER_BATCH - self.buffered_fills.len());
-            self.buffered_fills.extend_from_slice(&fills[0..count]);
-            fills = &fills[count..];
-            if self.buffered_fills.len() == MAX_FILLS_PER_BATCH {
-                self.draw_buffered_fills();
+        for fill_batch_entry in fill_batch {
+            let page = fill_batch_entry.page;
+            while self.alpha_tile_pages.len() <= page as usize {
+                self.alpha_tile_pages.push(AlphaTilePage::new(&mut self.device));
+            }
+            self.alpha_tile_pages[page as usize].buffered_fills.push(fill_batch_entry.fill);
+            if self.alpha_tile_pages[page as usize].buffered_fills.len() == MAX_FILLS_PER_BATCH {
+                self.draw_buffered_fills(page);
             }
         }
     }
 
-    fn draw_buffered_fills(&mut self) {
-        if self.buffered_fills.is_empty() {
+    fn draw_buffered_fills(&mut self, page: u16) {
+        let mask_viewport = self.mask_viewport();
+
+        let alpha_tile_page = &mut self.alpha_tile_pages[page as usize];
+        let buffered_fills = &mut alpha_tile_page.buffered_fills;
+        if buffered_fills.is_empty() {
             return;
         }
 
         self.device.allocate_buffer(
             &self.fill_vertex_array.vertex_buffer,
-            BufferData::Memory(&self.buffered_fills),
+            BufferData::Memory(&buffered_fills),
             BufferTarget::Vertex,
             BufferUploadMode::Dynamic,
         );
 
         let mut clear_color = None;
-        if !self.framebuffer_flags.contains(
-                FramebufferFlags::MUST_PRESERVE_FILL_FRAMEBUFFER_CONTENTS) {
+        if !alpha_tile_page.must_preserve_framebuffer {
             clear_color = Some(ColorF::default());
         };
 
-        let timer_query = self.allocate_timer_query();
-        self.device.begin_timer_query(&timer_query);
-
-        debug_assert!(self.buffered_fills.len() <= u32::MAX as usize);
-        self.device.draw_elements_instanced(6, self.buffered_fills.len() as u32, &RenderState {
-            target: &RenderTarget::Framebuffer(&self.fill_framebuffer),
+        debug_assert!(buffered_fills.len() <= u32::MAX as usize);
+        self.device.draw_elements_instanced(6, buffered_fills.len() as u32, &RenderState {
+            target: &RenderTarget::Framebuffer(&alpha_tile_page.framebuffer),
             program: &self.fill_program.program,
             vertex_array: &self.fill_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
@@ -558,7 +615,7 @@ where
                  UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
                 (&self.fill_program.area_lut_uniform, UniformData::TextureUnit(0)),
             ],
-            viewport: self.mask_viewport(),
+            viewport: mask_viewport,
             options: RenderOptions {
                 blend: Some(BlendState {
                     src_rgb_factor: BlendFactor::One,
@@ -572,11 +629,8 @@ where
             },
         });
 
-        self.device.end_timer_query(&timer_query);
-        self.current_timers.stage_0.push(timer_query);
-
-        self.framebuffer_flags.insert(FramebufferFlags::MUST_PRESERVE_FILL_FRAMEBUFFER_CONTENTS);
-        self.buffered_fills.clear();
+        alpha_tile_page.must_preserve_framebuffer = true;
+        buffered_fills.clear();
     }
 
     fn tile_transform(&self) -> Transform4F {
@@ -586,13 +640,13 @@ where
     }
 
     fn draw_tiles(&mut self,
+                  tile_page: u16,
                   tile_count: u32,
                   color_texture_0: Option<TileBatchTexture>,
-                  color_texture_1: Option<TileBatchTexture>,
                   mask_0_fill_rule: Option<FillRule>,
                   mask_1_fill_rule: Option<FillRule>,
                   blend_mode: BlendMode,
-                  effects: Effects) {
+                  filter: Filter) {
         // TODO(pcwalton): Disable blend for solid tiles.
 
         let needs_readable_framebuffer = blend_mode.needs_readable_framebuffer();
@@ -615,7 +669,7 @@ where
             }
         }
 
-        let mut textures = vec![];
+        let mut textures = vec![&self.texture_metadata_texture];
         let mut uniforms = vec![
             (&self.tile_program.transform_uniform,
              UniformData::Mat4(self.tile_transform().to_columns())),
@@ -623,6 +677,10 @@ where
              UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
             (&self.tile_program.framebuffer_size_uniform,
              UniformData::Vec2(draw_viewport.size().to_f32().0)),
+            (&self.tile_program.texture_metadata_uniform, UniformData::TextureUnit(0)),
+            (&self.tile_program.texture_metadata_size_uniform,
+             UniformData::IVec2(I32x2::new(TEXTURE_METADATA_TEXTURE_WIDTH,
+                                           TEXTURE_METADATA_TEXTURE_HEIGHT))),
         ];
 
         if needs_readable_framebuffer {
@@ -634,12 +692,14 @@ where
         if mask_0_fill_rule.is_some() {
             uniforms.push((&self.tile_program.mask_texture_0_uniform,
                            UniformData::TextureUnit(textures.len() as u32)));
-            textures.push(self.device.framebuffer_texture(&self.fill_framebuffer));
+            textures.push(self.device.framebuffer_texture(
+                &self.alpha_tile_pages[tile_page as usize].framebuffer));
         }
         if mask_1_fill_rule.is_some() {
             uniforms.push((&self.tile_program.mask_texture_1_uniform,
                            UniformData::TextureUnit(textures.len() as u32)));
-            textures.push(self.device.framebuffer_texture(&self.fill_framebuffer));
+            textures.push(self.device.framebuffer_texture(
+                &self.alpha_tile_pages[tile_page as usize].framebuffer));
         }
 
         // TODO(pcwalton): Refactor.
@@ -653,28 +713,26 @@ where
             uniforms.push((&self.tile_program.color_texture_0_size_uniform,
                            UniformData::Vec2(color_texture_size.0)));
             textures.push(color_texture_page);
-            ctrl |= COMBINER_CTRL_COLOR_ENABLE_MASK << COMBINER_CTRL_COLOR_0_ENABLE_SHIFT;
-        }
-        if let Some(color_texture) = color_texture_1 {
-            let color_texture_page = self.texture_page(color_texture.page);
-            self.device.set_texture_sampling_mode(color_texture_page,
-                                                  color_texture.sampling_flags);
-            uniforms.push((&self.tile_program.color_texture_1_uniform,
-                           UniformData::TextureUnit(textures.len() as u32)));
-            textures.push(color_texture_page);
-            ctrl |= COMBINER_CTRL_COLOR_ENABLE_MASK << COMBINER_CTRL_COLOR_1_ENABLE_SHIFT;
+
+            ctrl |= color_texture.composite_op.to_combine_mode() <<
+                COMBINER_CTRL_COLOR_COMBINE_SHIFT;
         }
 
         ctrl |= blend_mode.to_composite_ctrl() << COMBINER_CTRL_COMPOSITE_SHIFT;
 
-        match effects.filter {
+        match filter {
             Filter::None => {}
             Filter::RadialGradient { line, radii, uv_origin } => {
-                ctrl |= COMBINER_CTRL_FILTER_RADIAL_GRADIENT << COMBINER_CTRL_COLOR_0_FILTER_SHIFT;
+                ctrl |= COMBINER_CTRL_FILTER_RADIAL_GRADIENT << COMBINER_CTRL_COLOR_FILTER_SHIFT;
                 self.set_uniforms_for_radial_gradient_filter(&mut uniforms, line, radii, uv_origin)
             }
-            Filter::Text { fg_color, bg_color, defringing_kernel, gamma_correction } => {
-                ctrl |= COMBINER_CTRL_FILTER_TEXT << COMBINER_CTRL_COLOR_0_FILTER_SHIFT;
+            Filter::PatternFilter(PatternFilter::Text {
+                fg_color,
+                bg_color,
+                defringing_kernel,
+                gamma_correction,
+            }) => {
+                ctrl |= COMBINER_CTRL_FILTER_TEXT << COMBINER_CTRL_COLOR_FILTER_SHIFT;
                 self.set_uniforms_for_text_filter(&mut textures,
                                                   &mut uniforms,
                                                   fg_color,
@@ -682,15 +740,15 @@ where
                                                   defringing_kernel,
                                                   gamma_correction);
             }
-            Filter::Blur { direction, sigma } => {
-                ctrl |= COMBINER_CTRL_FILTER_BLUR << COMBINER_CTRL_COLOR_0_FILTER_SHIFT;
+            Filter::PatternFilter(PatternFilter::Blur { direction, sigma }) => {
+                ctrl |= COMBINER_CTRL_FILTER_BLUR << COMBINER_CTRL_COLOR_FILTER_SHIFT;
                 self.set_uniforms_for_blur_filter(&mut uniforms, direction, sigma);
             }
         }
 
         uniforms.push((&self.tile_program.ctrl_uniform, UniformData::Int(ctrl)));
 
-        self.device.draw_elements(tile_count * 6, &RenderState {
+        self.device.draw_elements_instanced(6, tile_count, &RenderState {
             target: &self.draw_render_target(),
             program: &self.tile_program.program,
             vertex_array: &self.tile_vertex_array.vertex_array,
@@ -1039,23 +1097,8 @@ where
         self.device.framebuffer_texture(&self.texture_page_framebuffer(id))
     }
 
-    fn allocate_timer_query(&mut self) -> D::TimerQuery {
-        match self.free_timer_queries.pop() {
-            Some(query) => query,
-            None => self.device.create_timer_query(),
-        }
-    }
-
-    fn begin_composite_timer_query(&mut self) {
-        let timer_query = self.allocate_timer_query();
-        self.device.begin_timer_query(&timer_query);
-        self.current_timers.stage_1 = Some(timer_query);
-    }
-
-    fn end_composite_timer_query(&mut self) {
-        if let Some(ref query) = self.current_timers.stage_1 {
-            self.device.end_timer_query(query);
-        }
+    fn allocate_timer_query(&mut self) -> Option<D::TimerQuery> {
+        self.free_timer_queries.pop()
     }
 }
 
@@ -1067,6 +1110,7 @@ pub struct RenderStats {
     pub fill_count: usize,
     pub alpha_tile_count: usize,
     pub solid_tile_count: usize,
+    pub cpu_build_time: Duration,
 }
 
 impl Add<RenderStats> for RenderStats {
@@ -1077,6 +1121,7 @@ impl Add<RenderStats> for RenderStats {
             solid_tile_count: self.solid_tile_count + other.solid_tile_count,
             alpha_tile_count: self.alpha_tile_count + other.alpha_tile_count,
             fill_count: self.fill_count + other.fill_count,
+            cpu_build_time: self.cpu_build_time + other.cpu_build_time,
         }
     }
 }
@@ -1089,31 +1134,25 @@ impl Div<usize> for RenderStats {
             solid_tile_count: self.solid_tile_count / divisor,
             alpha_tile_count: self.alpha_tile_count / divisor,
             fill_count: self.fill_count / divisor,
+            cpu_build_time: self.cpu_build_time / divisor as u32,
         }
     }
 }
 
-struct RenderTimers<D> where D: Device {
-    stage_0: Vec<D::TimerQuery>,
-    stage_1: Option<D::TimerQuery>,
-}
-
-impl<D> RenderTimers<D> where D: Device {
-    fn new() -> RenderTimers<D> {
-        RenderTimers { stage_0: vec![], stage_1: None }
-    }
+#[derive(Clone, Copy, Debug)]
+struct PendingTimer<D> where D: Device {
+    gpu_timer_query: D::TimerQuery,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderTime {
-    pub stage_0: Duration,
-    pub stage_1: Duration,
+    pub gpu_time: Duration,
 }
 
 impl Default for RenderTime {
     #[inline]
     fn default() -> RenderTime {
-        RenderTime { stage_0: Duration::new(0, 0), stage_1: Duration::new(0, 0) }
+        RenderTime { gpu_time: Duration::new(0, 0) }
     }
 }
 
@@ -1122,18 +1161,23 @@ impl Add<RenderTime> for RenderTime {
 
     #[inline]
     fn add(self, other: RenderTime) -> RenderTime {
-        RenderTime {
-            stage_0: self.stage_0 + other.stage_0,
-            stage_1: self.stage_1 + other.stage_1,
-        }
+        RenderTime { gpu_time: self.gpu_time + other.gpu_time }
+    }
+}
+
+impl Div<usize> for RenderTime {
+    type Output = RenderTime;
+
+    #[inline]
+    fn div(self, divisor: usize) -> RenderTime {
+        RenderTime { gpu_time: self.gpu_time / divisor as u32 }
     }
 }
 
 bitflags! {
     struct FramebufferFlags: u8 {
-        const MUST_PRESERVE_FILL_FRAMEBUFFER_CONTENTS = 0x01;
-        const MUST_PRESERVE_MASK_FRAMEBUFFER_CONTENTS = 0x02;
-        const MUST_PRESERVE_DEST_FRAMEBUFFER_CONTENTS = 0x04;
+        const MUST_PRESERVE_MASK_FRAMEBUFFER_CONTENTS = 0x01;
+        const MUST_PRESERVE_DEST_FRAMEBUFFER_CONTENTS = 0x02;
     }
 }
 
@@ -1342,6 +1386,21 @@ impl BlendModeExt for BlendMode {
     }
 }
 
+struct AlphaTilePage<D> where D: Device {
+    buffered_fills: Vec<Fill>,
+    framebuffer: D::Framebuffer,
+    must_preserve_framebuffer: bool,
+}
+
+impl<D> AlphaTilePage<D> where D: Device {
+    fn new(device: &mut D) -> AlphaTilePage<D> {
+        let framebuffer_size = vec2i(MASK_FRAMEBUFFER_WIDTH, MASK_FRAMEBUFFER_HEIGHT);
+        let framebuffer_texture = device.create_texture(TextureFormat::R16F, framebuffer_size);
+        let framebuffer = device.create_framebuffer(framebuffer_texture);
+        AlphaTilePage { buffered_fills: vec![], framebuffer, must_preserve_framebuffer: false }
+    }
+}
+
 bitflags! {
     struct RendererFlags: u8 {
         // Whether we need a depth buffer.
@@ -1388,6 +1447,19 @@ impl ToCompositeCtrl for BlendMode {
             BlendMode::Saturation => COMBINER_CTRL_COMPOSITE_SATURATION,
             BlendMode::Color => COMBINER_CTRL_COMPOSITE_COLOR,
             BlendMode::Luminosity => COMBINER_CTRL_COMPOSITE_LUMINOSITY,
+        }
+    }
+}
+
+trait ToCombineMode {
+    fn to_combine_mode(self) -> i32;
+}
+
+impl ToCombineMode for PaintCompositeOp {
+    fn to_combine_mode(self) -> i32 {
+        match self {
+            PaintCompositeOp::DestIn => COMBINER_CTRL_COLOR_COMBINE_DEST_IN,
+            PaintCompositeOp::SrcIn => COMBINER_CTRL_COLOR_COMBINE_SRC_IN,
         }
     }
 }

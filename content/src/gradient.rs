@@ -120,6 +120,11 @@ impl Gradient {
         &self.stops.array
     }
 
+    #[inline]
+    pub fn stops_mut(&mut self) -> &mut [ColorStop] {
+        &mut self.stops.array
+    }
+
     pub fn sample(&self, mut t: f32) -> ColorU {
         if self.stops.is_empty() {
             return ColorU::transparent_black();
@@ -144,6 +149,16 @@ impl Gradient {
                   .to_f32()
                   .lerp(upper_stop.color.to_f32(), (t - lower_stop.offset) / denom)
                   .to_u8()
+    }
+
+    #[inline]
+    pub fn is_opaque(&self) -> bool {
+        self.stops.array.iter().all(|stop| stop.color.is_opaque())
+    }
+
+    #[inline]
+    pub fn is_fully_transparent(&self) -> bool {
+        self.stops.array.iter().all(|stop| stop.color.is_fully_transparent())
     }
 }
 

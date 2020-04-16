@@ -332,7 +332,7 @@ impl F32x4 {
     /// Converts these packed floats to integers via rounding.
     #[inline]
     pub fn to_i32x4(self) -> I32x4 {
-        unsafe { I32x4(round_v4f32(simd_cast(self.0))) }
+        unsafe { I32x4(simd_cast(round_v4f32(self.0))) }
     }
 }
 
@@ -445,6 +445,18 @@ impl I32x2 {
         unsafe { U32x2(simd_eq(self.0, other.0)) }
     }
 
+    // Basic operations
+
+    #[inline]
+    pub fn max(self, other: I32x2) -> I32x2 {
+        self.to_i32x4().max(other.to_i32x4()).xy()
+    }
+
+    #[inline]
+    pub fn min(self, other: I32x2) -> I32x2 {
+        self.to_i32x4().min(other.to_i32x4()).xy()
+    }
+
     // Concatenations
 
     #[inline]
@@ -458,6 +470,11 @@ impl I32x2 {
     #[inline]
     pub fn to_f32x2(self) -> F32x2 {
         unsafe { F32x2(simd_cast(self.0)) }
+    }
+    
+    #[inline]
+    pub fn to_i32x4(self) -> I32x4 {
+        self.concat_xy_xy(I32x2::default())
     }
 }
 
@@ -542,12 +559,12 @@ impl I32x4 {
 
     #[inline]
     pub fn max(self, other: I32x4) -> I32x4 {
-        unsafe { I32x4(simd_fmax(self.0, other.0)) }
+        unsafe { I32x4(simd_cast(simd_fmax(self.to_f32x4().0, other.to_f32x4().0))) }
     }
 
     #[inline]
     pub fn min(self, other: I32x4) -> I32x4 {
-        unsafe { I32x4(simd_fmin(self.0, other.0)) }
+        unsafe { I32x4(simd_cast(simd_fmin(self.to_f32x4().0, other.to_f32x4().0))) }
     }
 
     // Packed comparisons
