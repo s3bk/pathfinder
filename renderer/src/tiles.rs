@@ -29,8 +29,8 @@ const FLATTENING_TOLERANCE: f32 = 0.1;
 pub const TILE_WIDTH: u32 = 16;
 pub const TILE_HEIGHT: u32 = 16;
 
-pub(crate) struct Tiler<'a, L: RenderCommandListener> {
-    scene_builder: &'a SceneBuilder<'a, L>,
+pub(crate) struct Tiler<'a, 'b, L: RenderCommandListener> {
+    scene_builder: &'a SceneBuilder<'a, 'b, L>,
     pub(crate) object_builder: ObjectBuilder,
     outline: &'a Outline,
     path_info: TilingPathInfo<'a>,
@@ -54,15 +54,15 @@ pub(crate) struct DrawTilingPathInfo<'a> {
     pub(crate) built_clip_path: Option<&'a BuiltPath>,
 }
 
-impl<'a, L: RenderCommandListener> Tiler<'a, L> {
+impl<'a, 'b, L: RenderCommandListener> Tiler<'a, 'b, L> {
     #[allow(clippy::or_fun_call)]
     pub(crate) fn new(
-        scene_builder: &'a SceneBuilder<'a, L>,
+        scene_builder: &'a SceneBuilder<'a, 'b, L>,
         outline: &'a Outline,
         fill_rule: FillRule,
         view_box: RectF,
         path_info: TilingPathInfo<'a>,
-    ) -> Tiler<'a, L> {
+    ) -> Tiler<'a, 'b, L> {
         let bounds = outline
             .bounds()
             .intersection(view_box)

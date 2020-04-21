@@ -226,7 +226,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -244,7 +244,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_metal",
@@ -262,7 +262,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -279,7 +279,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -301,7 +301,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -320,7 +320,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_log",
@@ -341,7 +341,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -705,7 +705,7 @@ dependencies = [
  "metal",
  "nfd",
  "pathfinder_demo",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_metal",
@@ -887,7 +887,7 @@ dependencies = [
  "lazy_static",
  "libc 0.2.69",
  "log",
- "pathfinder_geometry 0.5.1",
+ "pathfinder_geometry",
  "pathfinder_simd",
  "servo-fontconfig",
  "walkdir",
@@ -1714,7 +1714,7 @@ dependencies = [
  "jni",
  "lazy_static",
  "pathfinder_demo",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
 ]
@@ -1732,7 +1732,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_metal",
@@ -1743,12 +1743,12 @@ dependencies = [
 
 [[package]]
 name = "pathfinder_canvas"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "font-kit",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_renderer",
  "pathfinder_text",
  "skribo",
@@ -1756,20 +1756,20 @@ dependencies = [
 
 [[package]]
 name = "pathfinder_color"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "pathfinder_simd",
 ]
 
 [[package]]
 name = "pathfinder_content"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "arrayvec 0.5.1",
  "bitflags",
  "image",
  "pathfinder_color",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_log",
  "pathfinder_simd",
  "quickcheck",
@@ -1788,7 +1788,7 @@ dependencies = [
  "pathfinder_color",
  "pathfinder_content",
  "pathfinder_export",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_metal",
@@ -1808,34 +1808,24 @@ dependencies = [
  "deflate",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_renderer",
 ]
 
 [[package]]
 name = "pathfinder_geometry"
-version = "0.5.0"
-dependencies = [
- "pathfinder_simd",
-]
-
-[[package]]
-name = "pathfinder_geometry"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b7b7e7b4ea703700ce73ebf128e1450eb69c3a8329199ffbfb9b2a0418e5ad3"
 dependencies = [
- "log",
  "pathfinder_simd",
 ]
 
 [[package]]
 name = "pathfinder_gl"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "gl",
  "half",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gpu",
  "pathfinder_log",
  "pathfinder_resources",
@@ -1844,13 +1834,13 @@ dependencies = [
 
 [[package]]
 name = "pathfinder_gpu"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "bitflags",
  "half",
  "image",
  "pathfinder_color",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_resources",
  "pathfinder_simd",
 ]
@@ -1882,7 +1872,7 @@ dependencies = [
  "pathfinder_color",
  "pathfinder_content",
  "pathfinder_demo",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -1896,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "pathfinder_metal"
-version = "0.1.0"
+version = "0.5.1"
 dependencies = [
  "bitflags",
  "block",
@@ -1907,7 +1897,7 @@ dependencies = [
  "half",
  "metal",
  "objc",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gpu",
  "pathfinder_resources",
  "pathfinder_simd",
@@ -1915,16 +1905,17 @@ dependencies = [
 
 [[package]]
 name = "pathfinder_renderer"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "bitflags",
  "byteorder",
+ "crossbeam-channel",
  "half",
  "hashbrown",
  "instant",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gpu",
  "pathfinder_log",
  "pathfinder_resources",
@@ -1940,7 +1931,7 @@ dependencies = [
 
 [[package]]
 name = "pathfinder_resources"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "pathfinder_log",
 ]
@@ -1954,14 +1945,15 @@ dependencies = [
 
 [[package]]
 name = "pathfinder_svg"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "bitflags",
  "hashbrown",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_renderer",
+ "pathfinder_simd",
  "usvg",
 ]
 
@@ -1971,7 +1963,7 @@ version = "0.1.0"
 dependencies = [
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -1981,23 +1973,22 @@ dependencies = [
 
 [[package]]
 name = "pathfinder_text"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
- "euclid",
  "font-kit",
  "pathfinder_content",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_renderer",
  "skribo",
 ]
 
 [[package]]
 name = "pathfinder_ui"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "hashbrown",
  "pathfinder_color",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gpu",
  "pathfinder_resources",
  "pathfinder_simd",
@@ -2012,7 +2003,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "js-sys",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gpu",
  "pathfinder_log",
  "pathfinder_renderer",
@@ -2481,14 +2472,15 @@ checksum = "0b8de496cf83d4ed58b6be86c3a275b8602f6ffe98d3024a869e124147a9a3ac"
 
 [[package]]
 name = "skribo"
-version = "0.0.1"
-source = "git+https://github.com/pcwalton/skribo.git?rev=fe9c968521b4a6ed98c9166a6e620028fea285c1#fe9c968521b4a6ed98c9166a6e620028fea285c1"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6e9e713ecb4b6d3047428d060aa46cf4abd1109a961da245359e8f88a529d16"
 dependencies = [
  "font-kit",
  "harfbuzz",
  "harfbuzz-sys",
  "log",
- "pathfinder_geometry 0.5.1",
+ "pathfinder_geometry",
  "unicode-normalization",
 ]
 
@@ -2604,7 +2596,7 @@ name = "swf_basic"
 version = "0.1.0"
 dependencies = [
  "gl",
- "pathfinder_geometry 0.5.0",
+ "pathfinder_geometry",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
