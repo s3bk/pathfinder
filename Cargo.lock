@@ -145,9 +145,9 @@ dependencies = [
 
 [[package]]
 name = "backtrace-sys"
-version = "0.1.35"
+version = "0.1.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7de8aba10a69c8e8d7622c5710229485ec32e9d55fdad160ea559c086fdcd118"
+checksum = "78848718ee1255a2485d1309ad9cdecfc2e7d0362dd11c6829364c6b35ae1bc7"
 dependencies = [
  "cc",
  "libc 0.2.69",
@@ -226,7 +226,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -244,7 +244,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_metal",
@@ -262,7 +262,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -279,7 +279,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -297,10 +297,11 @@ dependencies = [
  "gl",
  "image",
  "jemallocator",
+ "log",
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -319,7 +320,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_log",
@@ -340,7 +341,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -704,7 +705,7 @@ dependencies = [
  "metal",
  "nfd",
  "pathfinder_demo",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_metal",
@@ -886,7 +887,7 @@ dependencies = [
  "lazy_static",
  "libc 0.2.69",
  "log",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.1",
  "pathfinder_simd",
  "servo-fontconfig",
  "walkdir",
@@ -1179,9 +1180,9 @@ dependencies = [
 
 [[package]]
 name = "image"
-version = "0.23.3"
+version = "0.23.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfc5483f8d5afd3653b38a196c52294dcb239c3e1a5bade1990353ea13bcf387"
+checksum = "9117f4167a8f21fa2bb3f17a652a760acd7572645281c98e3b612a26242c96ee"
 dependencies = [
  "bytemuck",
  "byteorder",
@@ -1713,7 +1714,7 @@ dependencies = [
  "jni",
  "lazy_static",
  "pathfinder_demo",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
 ]
@@ -1731,7 +1732,7 @@ dependencies = [
  "pathfinder_canvas",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_metal",
@@ -1747,7 +1748,7 @@ dependencies = [
  "font-kit",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_renderer",
  "pathfinder_text",
  "skribo",
@@ -1768,7 +1769,7 @@ dependencies = [
  "bitflags",
  "image",
  "pathfinder_color",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_log",
  "pathfinder_simd",
  "quickcheck",
@@ -1787,7 +1788,7 @@ dependencies = [
  "pathfinder_color",
  "pathfinder_content",
  "pathfinder_export",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_metal",
@@ -1807,7 +1808,7 @@ dependencies = [
  "deflate",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_renderer",
 ]
 
@@ -1819,12 +1820,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pathfinder_geometry"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b7b7e7b4ea703700ce73ebf128e1450eb69c3a8329199ffbfb9b2a0418e5ad3"
+dependencies = [
+ "log",
+ "pathfinder_simd",
+]
+
+[[package]]
 name = "pathfinder_gl"
 version = "0.1.0"
 dependencies = [
  "gl",
  "half",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gpu",
  "pathfinder_log",
  "pathfinder_resources",
@@ -1839,7 +1850,7 @@ dependencies = [
  "half",
  "image",
  "pathfinder_color",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_resources",
  "pathfinder_simd",
 ]
@@ -1871,7 +1882,7 @@ dependencies = [
  "pathfinder_color",
  "pathfinder_content",
  "pathfinder_demo",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -1896,7 +1907,7 @@ dependencies = [
  "half",
  "metal",
  "objc",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gpu",
  "pathfinder_resources",
  "pathfinder_simd",
@@ -1913,7 +1924,7 @@ dependencies = [
  "instant",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gpu",
  "pathfinder_log",
  "pathfinder_resources",
@@ -1949,7 +1960,7 @@ dependencies = [
  "hashbrown",
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_renderer",
  "usvg",
 ]
@@ -1960,7 +1971,7 @@ version = "0.1.0"
 dependencies = [
  "pathfinder_color",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -1975,7 +1986,7 @@ dependencies = [
  "euclid",
  "font-kit",
  "pathfinder_content",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_renderer",
  "skribo",
 ]
@@ -1986,7 +1997,7 @@ version = "0.1.0"
 dependencies = [
  "hashbrown",
  "pathfinder_color",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gpu",
  "pathfinder_resources",
  "pathfinder_simd",
@@ -2001,7 +2012,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "js-sys",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gpu",
  "pathfinder_log",
  "pathfinder_renderer",
@@ -2031,9 +2042,9 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "png"
-version = "0.16.2"
+version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "910f09135b1ed14bb16be445a8c23ddf0777eca485fbfc7cee00d81fecab158a"
+checksum = "2c68a431ed29933a4eb5709aca9800989758c97759345860fa5db3cfced0b65d"
 dependencies = [
  "bitflags",
  "crc32fast",
@@ -2216,9 +2227,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.3.6"
+version = "1.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f6946991529684867e47d86474e3a6d0c0ab9b82d5821e314b1ede31fa3a4b3"
+checksum = "a6020f034922e3194c711b82a627453881bc4682166cabb07134a10c26ba7692"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -2477,7 +2488,7 @@ dependencies = [
  "harfbuzz",
  "harfbuzz-sys",
  "log",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.1",
  "unicode-normalization",
 ]
 
@@ -2593,7 +2604,7 @@ name = "swf_basic"
 version = "0.1.0"
 dependencies = [
  "gl",
- "pathfinder_geometry",
+ "pathfinder_geometry 0.5.0",
  "pathfinder_gl",
  "pathfinder_gpu",
  "pathfinder_renderer",
@@ -2954,9 +2965,9 @@ checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
 
 [[package]]
 name = "winapi-util"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa515c5163a99cc82bab70fd3bfdd36d827be85de63737b40fcef2ce084a436e"
+checksum = "70ec6ce85bb158151cae5e5c87f95a8e97d2c0c4b001223f33a334e3ce5de178"
 dependencies = [
  "winapi 0.3.8",
 ]
