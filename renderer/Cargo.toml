@@ -15,6 +15,7 @@ debug_ui = []
 bitflags = "1.0"
 byteorder = "1.2"
 crossbeam-channel = "0.4"
+fxhash = "0.2"
 half = "1.5"
 hashbrown = "0.7"
 rayon = "1.0"
