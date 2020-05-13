@@ -209,6 +209,10 @@ pub unsafe extern "C" fn PFCanvasFontContextCreateWithSystemSource() -> PFCanvas
     Box::into_raw(Box::new(CanvasFontContext::from_system_source()))
 }
 
+/// Creates a Pathfinder font context from a set of `font-kit` fonts.
+///
+/// Note that `font-kit` itself has a C API. You can use this to load fonts from memory with e.g.
+/// `FKHandleCreateWithMemory()`.
 #[no_mangle]
 pub unsafe extern "C" fn PFCanvasFontContextCreateWithFonts(fonts: *const FKHandleRef,
                                                             font_count: usize)
@@ -803,7 +807,7 @@ impl PFRendererOptions {
                 None
             },
             // TODO(pcwalton): Expose this in the C API.
-            use_compute: false,
+            no_compute: false,
         }
     }
 }

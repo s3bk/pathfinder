@@ -12,10 +12,11 @@
 use crate::gpu::debug::DebugUIPresenter;
 
 use crate::gpu::options::{DestFramebuffer, RendererOptions};
-use crate::gpu::shaders::{BlitProgram, BlitVertexArray, ClipTileProgram, ClipTileVertexArray};
+use crate::gpu::shaders::{BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray, ClipTileProgram, ClipTileVertexArray};
 use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, FillVertexArray};
-use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, ReprojectionProgram, ReprojectionVertexArray};
-use crate::gpu::shaders::{StencilProgram, StencilVertexArray, TileProgram, TileVertexArray};
+use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, MAX_TILES_PER_BATCH, ReprojectionProgram};
+use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
+use crate::gpu::shaders::{TileProgram, TileVertexArray};
 use crate::gpu_data::{ClipBatch, ClipBatchKey, ClipBatchKind, Fill, FillBatchEntry, RenderCommand};
 use crate::gpu_data::{TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
 use crate::gpu_data::{Tile, TileBatchTexture};
@@ -34,13 +35,15 @@ use pathfinder_geometry::transform3d::Transform4F;
 use pathfinder_geometry::util;
 use pathfinder_geometry::vector::{Vector2F, Vector2I, Vector4F, vec2f, vec2i};
 use pathfinder_gpu::{BlendFactor, BlendOp, BlendState, BufferData, BufferTarget, BufferUploadMode};
-use pathfinder_gpu::{ClearOps, ComputeDimensions, ComputeState, DepthFunc, DepthState, Device, ImageAccess, ImageBinding, Primitive, RenderOptions};
-use pathfinder_gpu::{RenderState, RenderTarget, StencilFunc, StencilState, TextureDataRef};
+use pathfinder_gpu::{ClearOps, ComputeDimensions, ComputeState, DepthFunc, DepthState, Device};
+use pathfinder_gpu::{ImageAccess, ImageBinding, Primitive, RenderOptions, RenderState};
+use pathfinder_gpu::{RenderTarget, StencilFunc, StencilState, TextureDataRef};
 use pathfinder_gpu::{TextureFormat, UniformData};
 use pathfinder_resources::ResourceLoader;
 use pathfinder_simd::default::{F32x2, F32x4, I32x2};
 use std::collections::VecDeque;
 use std::f32;
+use std::marker::PhantomData;
 use std::mem;
 use std::ops::{Add, Div};
 use std::time::Duration;
@@ -57,13 +60,16 @@ const SQRT_2_PI_INV: f32 = 0.3989422804014327;
 
 const TEXTURE_CACHE_SIZE: usize = 8;
 
+const MIN_FILL_STORAGE_CLASS: usize = 14;   // 0x4000 entries, 128kB
+const MIN_TILE_STORAGE_CLASS: usize = 10;   // 1024 entries, 12kB
+
 const TEXTURE_METADATA_ENTRIES_PER_ROW: i32 = 128;
 const TEXTURE_METADATA_TEXTURE_WIDTH:   i32 = TEXTURE_METADATA_ENTRIES_PER_ROW * 4;
 const TEXTURE_METADATA_TEXTURE_HEIGHT:  i32 = 65536 / TEXTURE_METADATA_ENTRIES_PER_ROW;
 
 // FIXME(pcwalton): Shrink this again!
-const MASK_FRAMEBUFFER_WIDTH:  i32 = TILE_WIDTH as i32  * MASK_TILES_ACROSS as i32;
-const MASK_FRAMEBUFFER_HEIGHT: i32 = TILE_HEIGHT as i32 * MASK_TILES_DOWN as i32;
+const MASK_FRAMEBUFFER_WIDTH:  i32 = TILE_WIDTH as i32      * MASK_TILES_ACROSS as i32;
+const MASK_FRAMEBUFFER_HEIGHT: i32 = TILE_HEIGHT as i32 / 4 * MASK_TILES_DOWN as i32;
 
 const COMBINER_CTRL_COLOR_COMBINE_SRC_IN: i32 =     0x1;
 const COMBINER_CTRL_COLOR_COMBINE_DEST_IN: i32 =    0x2;
@@ -101,6 +107,7 @@ pub struct Renderer<D> where D: Device {
     dest_framebuffer: DestFramebuffer<D>,
     options: RendererOptions,
     blit_program: BlitProgram<D>,
+    clear_program: ClearProgram<D>,
     fill_program: FillProgram<D>,
     tile_program: TileProgram<D>,
     tile_copy_program: CopyTileProgram<D>,
@@ -142,13 +149,12 @@ pub struct Renderer<D> where D: Device {
 struct Frame<D> where D: Device {
     framebuffer_flags: FramebufferFlags,
     blit_vertex_array: BlitVertexArray<D>,
-    tile_vertex_array: TileVertexArray<D>,
-    tile_vertex_buffer: D::Buffer,
-    fill_vertex_storage_allocator: FillVertexStorageAllocator<D>,
+    clear_vertex_array: ClearVertexArray<D>,
+    fill_vertex_storage_allocator: StorageAllocator<D, FillVertexStorage<D>>,
+    tile_vertex_storage_allocator: StorageAllocator<D, TileVertexStorage<D>>,
     quads_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_length: usize,
     alpha_tile_pages: FxHashMap<u16, AlphaTilePage<D>>,
-    tile_copy_vertex_array: CopyTileVertexArray<D>,
     tile_clip_vertex_array: ClipTileVertexArray<D>,
     stencil_vertex_array: StencilVertexArray<D>,
     reprojection_vertex_array: ReprojectionVertexArray<D>,
@@ -164,6 +170,7 @@ impl<D> Renderer<D> where D: Device {
                options: RendererOptions)
                -> Renderer<D> {
         let blit_program = BlitProgram::new(&device, resources);
+        let clear_program = ClearProgram::new(&device, resources);
         let fill_program = FillProgram::new(&device, resources, &options);
         let tile_program = TileProgram::new(&device, resources);
         let tile_copy_program = CopyTileProgram::new(&device, resources);
@@ -171,8 +178,10 @@ impl<D> Renderer<D> where D: Device {
         let stencil_program = StencilProgram::new(&device, resources);
         let reprojection_program = ReprojectionProgram::new(&device, resources);
 
-        let area_lut_texture = device.create_texture_from_png(resources, "lut/area");
-        let gamma_lut_texture = device.create_texture_from_png(resources, "lut/gamma");
+        let area_lut_texture =
+            device.create_texture_from_png(resources, "lut/area", TextureFormat::RGBA8);
+        let gamma_lut_texture =
+            device.create_texture_from_png(resources, "lut/gamma", TextureFormat::R8);
 
         let quad_vertex_positions_buffer = device.create_buffer(BufferUploadMode::Static);
         device.allocate_buffer(&quad_vertex_positions_buffer,
@@ -192,8 +201,7 @@ impl<D> Renderer<D> where D: Device {
 
         let front_frame = Frame::new(&device,
                                      &blit_program,
-                                     &tile_program,
-                                     &tile_copy_program,
+                                     &clear_program,
                                      &tile_clip_program,
                                      &reprojection_program,
                                      &stencil_program,
@@ -202,8 +210,7 @@ impl<D> Renderer<D> where D: Device {
                                      window_size);
         let back_frame = Frame::new(&device,
                                     &blit_program,
-                                    &tile_program,
-                                    &tile_copy_program,
+                                    &clear_program,
                                     &tile_clip_program,
                                     &reprojection_program,
                                     &stencil_program,
@@ -217,6 +224,7 @@ impl<D> Renderer<D> where D: Device {
             dest_framebuffer,
             options,
             blit_program,
+            clear_program,
             fill_program,
             tile_program,
             tile_copy_program,
@@ -258,7 +266,7 @@ impl<D> Renderer<D> where D: Device {
     pub fn begin_scene(&mut self) {
         self.back_frame.framebuffer_flags = FramebufferFlags::empty();
         for alpha_tile_page in self.back_frame.alpha_tile_pages.values_mut() {
-            alpha_tile_page.must_preserve_framebuffer = false;
+            alpha_tile_page.framebuffer_is_dirty = false;
         }
 
         self.device.begin_commands();
@@ -303,9 +311,10 @@ impl<D> Renderer<D> where D: Device {
             RenderCommand::DrawTiles(ref batch) => {
                 let count = batch.tiles.len();
                 self.stats.alpha_tile_count += count;
-                self.upload_tiles(&batch.tiles);
+                let storage_id = self.upload_tiles(&batch.tiles);
                 self.draw_tiles(batch.tile_page,
                                 count as u32,
+                                storage_id,
                                 batch.color_texture,
                                 batch.blend_mode,
                                 batch.filter)
@@ -317,6 +326,7 @@ impl<D> Renderer<D> where D: Device {
     }
 
     pub fn end_scene(&mut self) {
+        self.clear_dest_framebuffer_if_necessary();
         self.blit_intermediate_dest_framebuffer_if_necessary();
 
         let old_front_frame_fence = self.front_frame_fence.take();
@@ -324,6 +334,8 @@ impl<D> Renderer<D> where D: Device {
         self.device.end_commands();
 
         self.back_frame.fill_vertex_storage_allocator.end_frame();
+        self.back_frame.tile_vertex_storage_allocator.end_frame();
+
         if let Some(timer) = self.current_timer.take() {
             self.pending_timers.push_back(timer);
         }
@@ -504,11 +516,33 @@ impl<D> Renderer<D> where D: Device {
         self.device.upload_to_texture(texture, rect, TextureDataRef::F16(&texels));
     }
 
-    fn upload_tiles(&mut self, tiles: &[Tile]) {
-        self.device.allocate_buffer(&self.back_frame.tile_vertex_buffer,
-                                    BufferData::Memory(&tiles),
-                                    BufferTarget::Vertex);
+    fn upload_tiles(&mut self, tiles: &[Tile]) -> StorageID {
+        debug_assert!(tiles.len() <= MAX_TILES_PER_BATCH);
+
+        let tile_program = &self.tile_program;
+        let tile_copy_program = &self.tile_copy_program;
+        let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
+        let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
+        let storage_id = self.back_frame.tile_vertex_storage_allocator.allocate(&self.device,
+                                                                                tiles.len() as u64,
+                                                                                |device, size| {
+            TileVertexStorage::new(size,
+                                   device,
+                                   tile_program,
+                                   tile_copy_program,
+                                   quad_vertex_positions_buffer,
+                                   quad_vertex_indices_buffer)
+        });
+
+        let vertex_buffer = &self.back_frame
+                                 .tile_vertex_storage_allocator
+                                 .get(storage_id)
+                                 .vertex_buffer;
+        self.device.upload_to_buffer(vertex_buffer, 0, tiles, BufferTarget::Vertex);
+
         self.ensure_index_buffer(tiles.len());
+
+        storage_id
     }
 
     fn ensure_index_buffer(&mut self, mut length: usize) {
@@ -540,30 +574,37 @@ impl<D> Renderer<D> where D: Device {
 
         self.stats.fill_count += fill_batch.len();
 
-        // Make sure we don't split batches across draw calls.
-        let mut pages_to_flush = vec![];
+        // We have to make sure we don't split batches across draw calls, or else the compute
+        // shader path, which expects to see all the fills belonging to one tile in the same
+        // batch, will break.
+
+        let mut pages_touched = vec![];
         for fill_batch_entry in fill_batch {
-            let page = fill_batch_entry.page;
-            if !self.back_frame.alpha_tile_pages.contains_key(&page) {
+            let page_index = fill_batch_entry.page;
+            if !self.back_frame.alpha_tile_pages.contains_key(&page_index) {
                 let alpha_tile_page = AlphaTilePage::new(&mut self.device);
-                self.back_frame.alpha_tile_pages.insert(page, alpha_tile_page);
+                self.back_frame.alpha_tile_pages.insert(page_index, alpha_tile_page);
             }
-            if self.back_frame
-                   .alpha_tile_pages[&page]
-                   .buffered_fills
-                   .len() == MAX_FILLS_PER_BATCH {
-                pages_to_flush.push(page);
+
+            let page = self.back_frame.alpha_tile_pages.get_mut(&page_index).unwrap();
+            if page.pending_fills.is_empty() {
+                pages_touched.push(page_index);
             }
-            self.back_frame
-                .alpha_tile_pages
-                .get_mut(&page)
-                .unwrap()
-                .buffered_fills
-                .push(fill_batch_entry.fill);
+            page.pending_fills.push(fill_batch_entry.fill);
         }
 
-        for page in pages_to_flush {
-            self.draw_buffered_fills(page);
+        for page_index in pages_touched {
+            if self.back_frame.alpha_tile_pages[&page_index].buffered_fills.len() +
+                    self.back_frame.alpha_tile_pages[&page_index].pending_fills.len() >
+                    MAX_FILLS_PER_BATCH {
+                self.draw_buffered_fills(page_index);
+            }
+
+            let page = self.back_frame.alpha_tile_pages.get_mut(&page_index).unwrap();
+            for fill in &page.pending_fills {
+                page.buffered_fills.push(*fill);
+            }
+            page.pending_fills.clear();
         }
     }
 
@@ -591,12 +632,21 @@ impl<D> Renderer<D> where D: Device {
             return;
         }
 
-        let fill_vertex_storage = self.back_frame
-                                      .fill_vertex_storage_allocator
-                                      .allocate(&self.device,
-                                                &self.fill_program,
-                                                &self.quad_vertex_positions_buffer,
-                                                &self.quad_vertex_indices_buffer);
+        let storage_id = {
+            let fill_program = &self.fill_program;
+            let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
+            let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
+            self.back_frame
+                .fill_vertex_storage_allocator
+                .allocate(&self.device, MAX_FILLS_PER_BATCH as u64, |device, size| {
+                FillVertexStorage::new(size,
+                                       device,
+                                       fill_program,
+                                       quad_vertex_positions_buffer,
+                                       quad_vertex_indices_buffer)
+            })
+        };
+        let fill_vertex_storage = self.back_frame.fill_vertex_storage_allocator.get(storage_id);
 
         let fill_vertex_array = match fill_vertex_storage.auxiliary {
             FillVertexStorageAuxiliary::Raster { ref vertex_array } => vertex_array,
@@ -609,7 +659,7 @@ impl<D> Renderer<D> where D: Device {
                                      BufferTarget::Vertex);
 
         let mut clear_color = None;
-        if !alpha_tile_page.must_preserve_framebuffer {
+        if !alpha_tile_page.framebuffer_is_dirty {
             clear_color = Some(ColorF::default());
         };
 
@@ -649,7 +699,7 @@ impl<D> Renderer<D> where D: Device {
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
 
-        alpha_tile_page.must_preserve_framebuffer = true;
+        alpha_tile_page.framebuffer_is_dirty = true;
         buffered_fills.clear();
     }
 
@@ -668,12 +718,21 @@ impl<D> Renderer<D> where D: Device {
             return;
         }
 
-        let fill_vertex_storage = self.back_frame
-                                      .fill_vertex_storage_allocator
-                                      .allocate(&self.device,
-                                                &self.fill_program,
-                                                &self.quad_vertex_positions_buffer,
-                                                &self.quad_vertex_indices_buffer);
+        let storage_id = {
+            let fill_program = &self.fill_program;
+            let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
+            let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
+            self.back_frame.fill_vertex_storage_allocator.allocate(&self.device,
+                                                                   MAX_FILLS_PER_BATCH as u64,
+                                                                   |device, size| {
+                FillVertexStorage::new(size,
+                                       device,
+                                       fill_program,
+                                       quad_vertex_positions_buffer,
+                                       quad_vertex_indices_buffer)
+            })
+        };
+        let fill_vertex_storage = self.back_frame.fill_vertex_storage_allocator.get(storage_id);
 
         let (tile_map_buffer, next_fills_buffer) = match fill_vertex_storage.auxiliary {
             FillVertexStorageAuxiliary::Compute { ref tile_map_buffer, ref next_fills_buffer } => {
@@ -742,7 +801,7 @@ impl<D> Renderer<D> where D: Device {
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
 
-        alpha_tile_page.must_preserve_framebuffer = true;
+        alpha_tile_page.framebuffer_is_dirty = true;
         buffered_fills.clear();
     }
 
@@ -763,7 +822,7 @@ impl<D> Renderer<D> where D: Device {
         }
 
         let mut clear_color = None;
-        if !self.back_frame.alpha_tile_pages[&dest_page].must_preserve_framebuffer {
+        if !self.back_frame.alpha_tile_pages[&dest_page].framebuffer_is_dirty {
             clear_color = Some(ColorF::default());
         };
 
@@ -815,7 +874,7 @@ impl<D> Renderer<D> where D: Device {
             .alpha_tile_pages
             .get_mut(&dest_page)
             .unwrap()
-            .must_preserve_framebuffer = true;
+            .framebuffer_is_dirty = true;
     }
 
     fn tile_transform(&self) -> Transform4F {
@@ -827,6 +886,7 @@ impl<D> Renderer<D> where D: Device {
     fn draw_tiles(&mut self,
                   tile_page: u16,
                   tile_count: u32,
+                  storage_id: StorageID,
                   color_texture_0: Option<TileBatchTexture>,
                   blend_mode: BlendMode,
                   filter: Filter) {
@@ -834,7 +894,7 @@ impl<D> Renderer<D> where D: Device {
 
         let needs_readable_framebuffer = blend_mode.needs_readable_framebuffer();
         if needs_readable_framebuffer {
-            self.copy_alpha_tiles_to_dest_blend_texture(tile_count);
+            self.copy_alpha_tiles_to_dest_blend_texture(tile_count, storage_id);
         }
 
         let clear_color = self.clear_color_for_draw_operation();
@@ -866,7 +926,10 @@ impl<D> Renderer<D> where D: Device {
 
         if let Some(alpha_tile_page) = self.back_frame.alpha_tile_pages.get(&tile_page) {
             uniforms.push((&self.tile_program.mask_texture_0_uniform,
-                        UniformData::TextureUnit(textures.len() as u32)));
+                           UniformData::TextureUnit(textures.len() as u32)));
+            uniforms.push((&self.tile_program.mask_texture_size_0_uniform,
+                           UniformData::Vec2(F32x2::new(MASK_FRAMEBUFFER_WIDTH as f32,
+                                                        MASK_FRAMEBUFFER_HEIGHT as f32))));
             textures.push(self.device.framebuffer_texture(&alpha_tile_page.framebuffer));
         }
 
@@ -879,22 +942,21 @@ impl<D> Renderer<D> where D: Device {
                 self.device.set_texture_sampling_mode(color_texture_page,
                                                     color_texture.sampling_flags);
                 uniforms.push((&self.tile_program.color_texture_0_uniform,
-                            UniformData::TextureUnit(textures.len() as u32)));
-                uniforms.push((&self.tile_program.color_texture_0_size_uniform,
-                            UniformData::Vec2(color_texture_size.0)));
+                               UniformData::TextureUnit(textures.len() as u32)));
+                uniforms.push((&self.tile_program.color_texture_size_0_uniform,
+                               UniformData::Vec2(color_texture_size.0)));
                 textures.push(color_texture_page);
 
                 ctrl |= color_texture.composite_op.to_combine_mode() <<
                     COMBINER_CTRL_COLOR_COMBINE_SHIFT;
             }
             None => {
-                uniforms.push((&self.tile_program.color_texture_0_size_uniform,
+                uniforms.push((&self.tile_program.color_texture_size_0_uniform,
                                UniformData::Vec2(F32x2::default())));
             }
         }
 
         ctrl |= blend_mode.to_composite_ctrl() << COMBINER_CTRL_COMPOSITE_SHIFT;
-
 
         match filter {
             Filter::None => self.set_uniforms_for_no_filter(&mut uniforms),
@@ -924,10 +986,16 @@ impl<D> Renderer<D> where D: Device {
 
         uniforms.push((&self.tile_program.ctrl_uniform, UniformData::Int(ctrl)));
 
+        let vertex_array = &self.back_frame
+                                .tile_vertex_storage_allocator
+                                .get(storage_id)
+                                .tile_vertex_array
+                                .vertex_array;
+
         self.device.draw_elements_instanced(6, tile_count, &RenderState {
             target: &self.draw_render_target(),
             program: &self.tile_program.program,
-            vertex_array: &self.back_frame.tile_vertex_array.vertex_array,
+            vertex_array,
             primitive: Primitive::Triangles,
             textures: &textures,
             images: &[],
@@ -947,7 +1015,7 @@ impl<D> Renderer<D> where D: Device {
         self.preserve_draw_framebuffer();
     }
 
-    fn copy_alpha_tiles_to_dest_blend_texture(&mut self, tile_count: u32) {
+    fn copy_alpha_tiles_to_dest_blend_texture(&mut self, tile_count: u32, storage_id: StorageID) {
         let draw_viewport = self.draw_viewport();
 
         let mut textures = vec![];
@@ -970,10 +1038,16 @@ impl<D> Renderer<D> where D: Device {
         uniforms.push((&self.tile_copy_program.framebuffer_size_uniform,
                        UniformData::Vec2(draw_viewport.size().to_f32().0)));
 
+        let vertex_array = &self.back_frame
+                                .tile_vertex_storage_allocator
+                                .get(storage_id)
+                                .tile_copy_vertex_array
+                                .vertex_array;
+
         self.device.draw_elements(tile_count * 6, &RenderState {
             target: &RenderTarget::Framebuffer(&self.back_frame.dest_blend_framebuffer),
             program: &self.tile_copy_program.program,
-            vertex_array: &self.back_frame.tile_copy_vertex_array.vertex_array,
+            vertex_array,
             primitive: Primitive::Triangles,
             textures: &textures,
             images: &[],
@@ -1175,6 +1249,39 @@ impl<D> Renderer<D> where D: Device {
         ]);
     }
 
+    fn clear_dest_framebuffer_if_necessary(&mut self) {
+        let background_color = match self.options.background_color {
+            None => return,
+            Some(background_color) => background_color,
+        };
+
+        if self.back_frame
+               .framebuffer_flags
+               .contains(FramebufferFlags::DEST_FRAMEBUFFER_IS_DIRTY) {
+            return;
+        }
+
+        let main_viewport = self.main_viewport();
+        let uniforms = [
+            (&self.clear_program.rect_uniform, UniformData::Vec4(main_viewport.to_f32().0)),
+            (&self.clear_program.framebuffer_size_uniform,
+             UniformData::Vec2(main_viewport.size().to_f32().0)),
+            (&self.clear_program.color_uniform, UniformData::Vec4(background_color.0)),
+        ];
+
+        self.device.draw_elements(6, &RenderState {
+            target: &RenderTarget::Default,
+            program: &self.clear_program.program,
+            vertex_array: &self.back_frame.clear_vertex_array.vertex_array,
+            primitive: Primitive::Triangles,
+            textures: &[],
+            images: &[],
+            uniforms: &uniforms[..],
+            viewport: main_viewport,
+            options: RenderOptions::default(),
+        });
+    }
+
     fn blit_intermediate_dest_framebuffer_if_necessary(&mut self) {
         if !self.flags.contains(RendererFlags::INTERMEDIATE_DEST_FRAMEBUFFER_NEEDED) {
             return;
@@ -1231,7 +1338,7 @@ impl<D> Renderer<D> where D: Device {
             None => {
                 self.back_frame
                     .framebuffer_flags
-                    .contains(FramebufferFlags::MUST_PRESERVE_DEST_FRAMEBUFFER_CONTENTS)
+                    .contains(FramebufferFlags::DEST_FRAMEBUFFER_IS_DIRTY)
             }
         };
 
@@ -1256,7 +1363,7 @@ impl<D> Renderer<D> where D: Device {
             None => {
                 self.back_frame
                     .framebuffer_flags
-                    .insert(FramebufferFlags::MUST_PRESERVE_DEST_FRAMEBUFFER_CONTENTS);
+                    .insert(FramebufferFlags::DEST_FRAMEBUFFER_IS_DIRTY);
             }
         }
     }
@@ -1304,8 +1411,7 @@ impl<D> Frame<D> where D: Device {
     // FIXME(pcwalton): This signature shouldn't be so big. Make a struct.
     fn new(device: &D,
            blit_program: &BlitProgram<D>,
-           tile_program: &TileProgram<D>,
-           tile_copy_program: &CopyTileProgram<D>,
+           clear_program: &ClearProgram<D>,
            tile_clip_program: &ClipTileProgram<D>,
            reprojection_program: &ReprojectionProgram<D>,
            stencil_program: &StencilProgram<D>,
@@ -1313,22 +1419,16 @@ impl<D> Frame<D> where D: Device {
            quad_vertex_indices_buffer: &D::Buffer,
            window_size: Vector2I)
            -> Frame<D> {
-        let tile_vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
         let quads_vertex_indices_buffer = device.create_buffer(BufferUploadMode::Dynamic);
 
         let blit_vertex_array = BlitVertexArray::new(device,
                                                      &blit_program,
                                                      &quad_vertex_positions_buffer,
                                                      &quad_vertex_indices_buffer);
-        let tile_vertex_array = TileVertexArray::new(device,
-                                                     &tile_program,
-                                                     &tile_vertex_buffer,
-                                                     &quad_vertex_positions_buffer,
-                                                     &quad_vertex_indices_buffer);
-        let tile_copy_vertex_array = CopyTileVertexArray::new(device,
-                                                              &tile_copy_program,
-                                                              &tile_vertex_buffer,
-                                                              &quads_vertex_indices_buffer);
+        let clear_vertex_array = ClearVertexArray::new(device,
+                                                       &clear_program,
+                                                       &quad_vertex_positions_buffer,
+                                                       &quad_vertex_indices_buffer);
         let tile_clip_vertex_array = ClipTileVertexArray::new(device,
                                                               &tile_clip_program,
                                                               &quad_vertex_positions_buffer,
@@ -1339,7 +1439,8 @@ impl<D> Frame<D> where D: Device {
                                                                      &quad_vertex_indices_buffer);
         let stencil_vertex_array = StencilVertexArray::new(device, &stencil_program);
 
-        let fill_vertex_storage_allocator = FillVertexStorageAllocator::new(device);
+        let fill_vertex_storage_allocator = StorageAllocator::new(MIN_FILL_STORAGE_CLASS);
+        let tile_vertex_storage_allocator = StorageAllocator::new(MIN_TILE_STORAGE_CLASS);
 
         let texture_metadata_texture_size = vec2i(TEXTURE_METADATA_TEXTURE_WIDTH,
                                                   TEXTURE_METADATA_TEXTURE_HEIGHT);
@@ -1354,13 +1455,12 @@ impl<D> Frame<D> where D: Device {
 
         Frame {
             blit_vertex_array,
-            tile_vertex_array,
-            tile_copy_vertex_array,
+            clear_vertex_array,
+            tile_vertex_storage_allocator,
+            fill_vertex_storage_allocator,
             tile_clip_vertex_array,
             reprojection_vertex_array,
             stencil_vertex_array,
-            fill_vertex_storage_allocator,
-            tile_vertex_buffer,
             quads_vertex_indices_buffer,
             quads_vertex_indices_length: 0,
             alpha_tile_pages: FxHashMap::default(),
@@ -1374,9 +1474,53 @@ impl<D> Frame<D> where D: Device {
 
 // Buffer management
 
-struct FillVertexStorageAllocator<D> where D: Device {
-    free: Vec<FillVertexStorage<D>>,
-    in_use: Vec<FillVertexStorage<D>>,
+struct StorageAllocator<D, S> where D: Device {
+    buckets: Vec<StorageAllocatorBucket<S>>,
+    min_size_class: usize,
+    phantom: PhantomData<D>,
+}
+
+struct StorageAllocatorBucket<S> {
+    free: Vec<S>,
+    in_use: Vec<S>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StorageID {
+    bucket: usize,
+    index: usize,
+}
+
+impl<D, S> StorageAllocator<D, S> where D: Device {
+    fn new(min_size_class: usize) -> StorageAllocator<D, S> {
+        StorageAllocator { buckets: vec![], min_size_class, phantom: PhantomData }
+    }
+
+    fn allocate<F>(&mut self, device: &D, size: u64, allocator: F) -> StorageID
+                   where D: Device, F: FnOnce(&D, u64) -> S {
+        let size_class = (64 - (size.leading_zeros() as usize)).max(self.min_size_class);
+        let bucket_index = size_class - self.min_size_class;
+        while self.buckets.len() < bucket_index + 1 {
+            self.buckets.push(StorageAllocatorBucket { free: vec![], in_use: vec![] });
+        }
+
+        let bucket = &mut self.buckets[bucket_index];
+        match bucket.free.pop() {
+            Some(storage) => bucket.in_use.push(storage),
+            None => bucket.in_use.push(allocator(device, 1 << size_class as u64)),
+        }
+        StorageID { bucket: bucket_index, index: bucket.in_use.len() - 1 }
+    }
+
+    fn get(&self, storage_id: StorageID) -> &S {
+        &self.buckets[storage_id.bucket].in_use[storage_id.index]
+    }
+
+    fn end_frame(&mut self) {
+        for bucket in &mut self.buckets {
+            bucket.free.extend(mem::replace(&mut bucket.in_use, vec![]).into_iter())
+        }
+    }
 }
 
 struct FillVertexStorage<D> where D: Device {
@@ -1392,46 +1536,24 @@ enum FillVertexStorageAuxiliary<D> where D: Device {
     },
 }
 
-impl<D> FillVertexStorageAllocator<D> where D: Device {
-    fn new(_: &D) -> FillVertexStorageAllocator<D> {
-        FillVertexStorageAllocator { free: vec![], in_use: vec![] }
-    }
-
-    fn allocate(&mut self,
-                device: &D,
-                fill_program: &FillProgram<D>,
-                quad_vertex_positions_buffer: &D::Buffer,
-                quad_vertex_indices_buffer: &D::Buffer)
-                -> &FillVertexStorage<D> {
-        match self.free.pop() {
-            Some(storage) => self.in_use.push(storage),
-            None => {
-                self.in_use.push(FillVertexStorage::new(device,
-                                                        fill_program,
-                                                        quad_vertex_positions_buffer,
-                                                        quad_vertex_indices_buffer));
-            }
-        }
-        self.in_use.last().unwrap()
-    }
-
-    fn end_frame(&mut self) {
-        self.free.extend(mem::replace(&mut self.in_use, vec![]).into_iter())
-    }
+struct TileVertexStorage<D> where D: Device {
+    tile_vertex_array: TileVertexArray<D>,
+    tile_copy_vertex_array: CopyTileVertexArray<D>,
+    vertex_buffer: D::Buffer,
 }
 
 impl<D> FillVertexStorage<D> where D: Device {
-    fn new(device: &D,
+    fn new(size: u64,
+           device: &D,
            fill_program: &FillProgram<D>,
            quad_vertex_positions_buffer: &D::Buffer,
            quad_vertex_indices_buffer: &D::Buffer)
            -> FillVertexStorage<D> {
         let vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-        // FIXME(pcwalton): * 2 is a hack; fix.
-        let vertex_buffer_data: BufferData<Fill> = BufferData::Uninitialized(MAX_FILLS_PER_BATCH * 10);
+        let vertex_buffer_data: BufferData<Fill> = BufferData::Uninitialized(size as usize);
         device.allocate_buffer(&vertex_buffer, vertex_buffer_data, BufferTarget::Vertex);
 
-        let auxiliary = match fill_program {
+        let auxiliary = match *fill_program {
             FillProgram::Raster(ref fill_raster_program) => {
                 FillVertexStorageAuxiliary::Raster {
                     vertex_array: FillVertexArray::new(device,
@@ -1444,9 +1566,8 @@ impl<D> FillVertexStorage<D> where D: Device {
             FillProgram::Compute(_) => {
                 let next_fills_buffer = device.create_buffer(BufferUploadMode::Dynamic);
                 let tile_map_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-                // FIXME(pcwalton): * 2 is a hack; fix.
                 let next_fills_buffer_data: BufferData<i32> =
-                    BufferData::Uninitialized(MAX_FILLS_PER_BATCH * 10);
+                    BufferData::Uninitialized(size as usize);
                 let tile_map_buffer_data: BufferData<i32> =
                     BufferData::Uninitialized(256 * 256);
                 device.allocate_buffer(&next_fills_buffer,
@@ -1460,6 +1581,31 @@ impl<D> FillVertexStorage<D> where D: Device {
         };
 
         FillVertexStorage { vertex_buffer, auxiliary }
+    }
+}
+
+impl<D> TileVertexStorage<D> where D: Device {
+    fn new(size: u64,
+           device: &D,
+           tile_program: &TileProgram<D>,
+           tile_copy_program: &CopyTileProgram<D>,
+           quad_vertex_positions_buffer: &D::Buffer,
+           quad_vertex_indices_buffer: &D::Buffer)
+           -> TileVertexStorage<D> {
+        let vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        device.allocate_buffer::<Tile>(&vertex_buffer,
+                                       BufferData::Uninitialized(size as usize),
+                                       BufferTarget::Vertex);
+        let tile_vertex_array = TileVertexArray::new(device,
+                                                     &tile_program,
+                                                     &vertex_buffer,
+                                                     &quad_vertex_positions_buffer,
+                                                     &quad_vertex_indices_buffer);
+        let tile_copy_vertex_array = CopyTileVertexArray::new(device,
+                                                              &tile_copy_program,
+                                                              &vertex_buffer,
+                                                              &quad_vertex_indices_buffer);
+        TileVertexStorage { vertex_buffer, tile_vertex_array, tile_copy_vertex_array }
     }
 }
 
@@ -1609,8 +1755,8 @@ impl Div<usize> for RenderTime {
 
 bitflags! {
     struct FramebufferFlags: u8 {
-        const MUST_PRESERVE_MASK_FRAMEBUFFER_CONTENTS = 0x01;
-        const MUST_PRESERVE_DEST_FRAMEBUFFER_CONTENTS = 0x02;
+        const MASK_FRAMEBUFFER_IS_DIRTY = 0x01;
+        const DEST_FRAMEBUFFER_IS_DIRTY = 0x02;
     }
 }
 
@@ -1821,16 +1967,22 @@ impl BlendModeExt for BlendMode {
 
 struct AlphaTilePage<D> where D: Device {
     buffered_fills: Vec<Fill>,
+    pending_fills: Vec<Fill>,
     framebuffer: D::Framebuffer,
-    must_preserve_framebuffer: bool,
+    framebuffer_is_dirty: bool,
 }
 
 impl<D> AlphaTilePage<D> where D: Device {
     fn new(device: &mut D) -> AlphaTilePage<D> {
         let framebuffer_size = vec2i(MASK_FRAMEBUFFER_WIDTH, MASK_FRAMEBUFFER_HEIGHT);
-        let framebuffer_texture = device.create_texture(TextureFormat::R16F, framebuffer_size);
+        let framebuffer_texture = device.create_texture(TextureFormat::RGBA16F, framebuffer_size);
         let framebuffer = device.create_framebuffer(framebuffer_texture);
-        AlphaTilePage { buffered_fills: vec![], framebuffer, must_preserve_framebuffer: false }
+        AlphaTilePage {
+            buffered_fills: vec![],
+            pending_fills: vec![],
+            framebuffer,
+            framebuffer_is_dirty: false,
+        }
     }
 }
 

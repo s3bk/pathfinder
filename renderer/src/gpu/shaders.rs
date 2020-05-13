@@ -9,17 +9,19 @@
 // except according to those terms.
 
 use crate::gpu::options::RendererOptions;
+use crate::gpu::renderer::{MASK_TILES_ACROSS, MASK_TILES_DOWN};
 use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
-use pathfinder_gpu::{BufferTarget, BufferUploadMode, ComputeDimensions, Device, VertexAttrClass};
-use pathfinder_gpu::{VertexAttrDescriptor, VertexAttrType};
+use pathfinder_gpu::{BufferTarget, BufferUploadMode, ComputeDimensions, Device, FeatureLevel};
+use pathfinder_gpu::{VertexAttrClass, VertexAttrDescriptor, VertexAttrType};
 use pathfinder_resources::ResourceLoader;
 
 // TODO(pcwalton): Replace with `mem::size_of` calls?
+pub(crate) const TILE_INSTANCE_SIZE: usize = 12;
 const FILL_INSTANCE_SIZE: usize = 8;
-const TILE_INSTANCE_SIZE: usize = 12;
 const CLIP_TILE_INSTANCE_SIZE: usize = 8;
 
-pub const MAX_FILLS_PER_BATCH: usize = 0x4000;
+pub const MAX_FILLS_PER_BATCH: usize = 0x10000;
+pub const MAX_TILES_PER_BATCH: usize = MASK_TILES_ACROSS as usize * MASK_TILES_DOWN as usize;
 
 pub struct BlitVertexArray<D> where D: Device {
     pub vertex_array: D::VertexArray,
@@ -47,6 +49,35 @@ impl<D> BlitVertexArray<D> where D: Device {
         device.bind_buffer(&vertex_array, quad_vertex_indices_buffer, BufferTarget::Index);
 
         BlitVertexArray { vertex_array }
+    }
+}
+
+pub struct ClearVertexArray<D> where D: Device {
+    pub vertex_array: D::VertexArray,
+}
+
+impl<D> ClearVertexArray<D> where D: Device {
+    pub fn new(device: &D,
+               clear_program: &ClearProgram<D>,
+               quad_vertex_positions_buffer: &D::Buffer,
+               quad_vertex_indices_buffer: &D::Buffer)
+               -> ClearVertexArray<D> {
+        let vertex_array = device.create_vertex_array();
+        let position_attr = device.get_vertex_attr(&clear_program.program, "Position").unwrap();
+
+        device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, BufferTarget::Vertex);
+        device.configure_vertex_attr(&vertex_array, &position_attr, &VertexAttrDescriptor {
+            size: 2,
+            class: VertexAttrClass::Int,
+            attr_type: VertexAttrType::I16,
+            stride: 4,
+            offset: 0,
+            divisor: 0,
+            buffer_index: 0,
+        });
+        device.bind_buffer(&vertex_array, quad_vertex_indices_buffer, BufferTarget::Index);
+
+        ClearVertexArray { vertex_array }
     }
 }
 
@@ -335,6 +366,23 @@ impl<D> BlitProgram<D> where D: Device {
     }
 }
 
+pub struct ClearProgram<D> where D: Device {
+    pub program: D::Program,
+    pub rect_uniform: D::Uniform,
+    pub framebuffer_size_uniform: D::Uniform,
+    pub color_uniform: D::Uniform,
+}
+
+impl<D> ClearProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> ClearProgram<D> {
+        let program = device.create_raster_program(resources, "clear");
+        let rect_uniform = device.get_uniform(&program, "Rect");
+        let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
+        let color_uniform = device.get_uniform(&program, "Color");
+        ClearProgram { program, rect_uniform, framebuffer_size_uniform, color_uniform }
+    }
+}
+
 pub enum FillProgram<D> where D: Device {
     Raster(FillRasterProgram<D>),
     Compute(FillComputeProgram<D>),
@@ -343,10 +391,13 @@ pub enum FillProgram<D> where D: Device {
 impl<D> FillProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader, options: &RendererOptions)
                -> FillProgram<D> {
-        if options.use_compute {
-            FillProgram::Compute(FillComputeProgram::new(device, resources))
-        } else {
-            FillProgram::Raster(FillRasterProgram::new(device, resources))
+        match (options.no_compute, device.feature_level()) {
+            (false, FeatureLevel::D3D11) => {
+                FillProgram::Compute(FillComputeProgram::new(device, resources))
+            }
+            (_, FeatureLevel::D3D10) | (true, _) => {
+                FillProgram::Raster(FillRasterProgram::new(device, resources))
+            }
         }
     }
 }
@@ -386,7 +437,7 @@ pub struct FillComputeProgram<D> where D: Device {
 impl<D> FillComputeProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> FillComputeProgram<D> {
         let mut program = device.create_compute_program(resources, "fill");
-        let local_size = ComputeDimensions { x: TILE_WIDTH, y: TILE_HEIGHT, z: 1 };
+        let local_size = ComputeDimensions { x: TILE_WIDTH, y: TILE_HEIGHT / 4, z: 1 };
         device.set_compute_program_local_size(&mut program, local_size);
 
         let dest_uniform = device.get_uniform(&program, "Dest");
@@ -416,10 +467,11 @@ pub struct TileProgram<D> where D: Device {
     pub texture_metadata_size_uniform: D::Uniform,
     pub dest_texture_uniform: D::Uniform,
     pub color_texture_0_uniform: D::Uniform,
+    pub color_texture_size_0_uniform: D::Uniform,
     pub color_texture_1_uniform: D::Uniform,
     pub mask_texture_0_uniform: D::Uniform,
+    pub mask_texture_size_0_uniform: D::Uniform,
     pub gamma_lut_uniform: D::Uniform,
-    pub color_texture_0_size_uniform: D::Uniform,
     pub filter_params_0_uniform: D::Uniform,
     pub filter_params_1_uniform: D::Uniform,
     pub filter_params_2_uniform: D::Uniform,
@@ -436,10 +488,11 @@ impl<D> TileProgram<D> where D: Device {
         let texture_metadata_size_uniform = device.get_uniform(&program, "TextureMetadataSize");
         let dest_texture_uniform = device.get_uniform(&program, "DestTexture");
         let color_texture_0_uniform = device.get_uniform(&program, "ColorTexture0");
+        let color_texture_size_0_uniform = device.get_uniform(&program, "ColorTextureSize0");
         let color_texture_1_uniform = device.get_uniform(&program, "ColorTexture1");
         let mask_texture_0_uniform = device.get_uniform(&program, "MaskTexture0");
+        let mask_texture_size_0_uniform = device.get_uniform(&program, "MaskTextureSize0");
         let gamma_lut_uniform = device.get_uniform(&program, "GammaLUT");
-        let color_texture_0_size_uniform = device.get_uniform(&program, "ColorTexture0Size");
         let filter_params_0_uniform = device.get_uniform(&program, "FilterParams0");
         let filter_params_1_uniform = device.get_uniform(&program, "FilterParams1");
         let filter_params_2_uniform = device.get_uniform(&program, "FilterParams2");
@@ -453,10 +506,11 @@ impl<D> TileProgram<D> where D: Device {
             texture_metadata_size_uniform,
             dest_texture_uniform,
             color_texture_0_uniform,
+            color_texture_size_0_uniform,
             color_texture_1_uniform,
             mask_texture_0_uniform,
+            mask_texture_size_0_uniform,
             gamma_lut_uniform,
-            color_texture_0_size_uniform,
             filter_params_0_uniform,
             filter_params_1_uniform,
             filter_params_2_uniform,

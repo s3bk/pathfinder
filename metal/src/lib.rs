@@ -47,10 +47,11 @@ use objc::runtime::{Class, Object};
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::vector::{Vector2I, vec2i};
 use pathfinder_gpu::{BlendFactor, BlendOp, BufferData, BufferTarget, BufferUploadMode};
-use pathfinder_gpu::{ComputeDimensions, ComputeState, DepthFunc, Device, ImageAccess, Primitive};
-use pathfinder_gpu::{ProgramKind, RenderState, RenderTarget, ShaderKind, StencilFunc, TextureData};
-use pathfinder_gpu::{TextureDataRef, TextureFormat, TextureSamplingFlags, UniformData};
-use pathfinder_gpu::{VertexAttrClass, VertexAttrDescriptor, VertexAttrType};
+use pathfinder_gpu::{ComputeDimensions, ComputeState, DepthFunc, Device, FeatureLevel};
+use pathfinder_gpu::{ImageAccess, Primitive, ProgramKind, RenderState, RenderTarget, ShaderKind};
+use pathfinder_gpu::{StencilFunc, TextureData, TextureDataRef, TextureFormat};
+use pathfinder_gpu::{TextureSamplingFlags, UniformData, VertexAttrClass};
+use pathfinder_gpu::{VertexAttrDescriptor, VertexAttrType};
 use pathfinder_resources::ResourceLoader;
 use pathfinder_simd::default::{F32x2, F32x4, I32x2};
 use std::cell::{Cell, RefCell};
@@ -271,6 +272,11 @@ impl Device for MetalDevice {
     type Uniform = MetalUniform;
     type VertexArray = MetalVertexArray;
     type VertexAttr = VertexAttribute;
+
+    #[inline]
+    fn feature_level(&self) -> FeatureLevel {
+        FeatureLevel::D3D11
+    }
 
     // TODO: Add texture usage hint.
     fn create_texture(&self, format: TextureFormat, size: Vector2I) -> MetalTexture {
@@ -728,13 +734,15 @@ impl Device for MetalDevice {
 
         let captured_query = query.clone();
         let start_block = ConcreteBlock::new(move |_: *mut Object, _: u64| {
+            let start_time = Instant::now();
             let mut guard = captured_query.0.mutex.lock().unwrap();
-            guard.start_time = Some(Instant::now());
+            guard.start_time = Some(start_time);
         });
         let captured_query = query.clone();
         let end_block = ConcreteBlock::new(move |_: *mut Object, _: u64| {
+            let end_time = Instant::now();
             let mut guard = captured_query.0.mutex.lock().unwrap();
-            guard.end_time = Some(Instant::now());
+            guard.end_time = Some(end_time);
             captured_query.0.cond.notify_all();
         });
         self.shared_event.notify_listener_at_value(&self.shared_event_listener,
