@@ -1,6 +1,6 @@
-#version 330
+#version 430
 
-// pathfinder/shaders/tile_clip.fs.glsl
+// pathfinder/shaders/blit_buffer.fs.glsl
 //
 // Copyright © 2020 The Pathfinder Project Developers.
 //
@@ -16,13 +16,21 @@ precision highp float;
 precision highp sampler2D;
 #endif
 
-uniform sampler2D uSrc;
+uniform ivec2 uBufferSize;
+
+layout(std430, binding = 0) buffer bBuffer {
+    restrict int iBuffer[];
+};
 
 in vec2 vTexCoord;
-in float vBackdrop;
 
 out vec4 oFragColor;
 
 void main() {
-    oFragColor = clamp(abs(texture(uSrc, vTexCoord) + vBackdrop), 0.0, 1.0);
+    ivec2 texCoord = ivec2(floor(vTexCoord));
+    int value = iBuffer[texCoord.y * uBufferSize.x + texCoord.x];
+    oFragColor = vec4(value & 0xff,
+                      (value >> 8) & 0xff,
+                      (value >> 16) & 0xff,
+                      (value >> 24) & 0xff) / 255.0;
 }

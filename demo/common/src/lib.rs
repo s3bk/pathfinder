@@ -34,9 +34,10 @@ use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::transform3d::Transform4F;
 use pathfinder_geometry::vector::{Vector2F, Vector2I, Vector4F, vec2f, vec2i};
 use pathfinder_gpu::Device;
-use pathfinder_renderer::concurrent::scene_proxy::{RenderCommandStream, SceneProxy};
-use pathfinder_renderer::gpu::options::{DestFramebuffer, RendererOptions};
-use pathfinder_renderer::gpu::renderer::{RenderStats, RenderTime, Renderer};
+use pathfinder_renderer::concurrent::scene_proxy::SceneProxy;
+use pathfinder_renderer::gpu::options::{DestFramebuffer, RendererLevel, RendererOptions};
+use pathfinder_renderer::gpu::perf::{RenderStats, RenderTime};
+use pathfinder_renderer::gpu::renderer::Renderer;
 use pathfinder_renderer::options::{BuildOptions, RenderTransform};
 use pathfinder_renderer::paint::Paint;
 use pathfinder_renderer::scene::{DrawPath, RenderTarget, Scene};
@@ -90,7 +91,7 @@ pub struct DemoApp<W> where W: Window {
     svg_tree: Tree,
     scene_metadata: SceneMetadata,
     render_transform: Option<RenderTransform>,
-    render_command_stream: Option<RenderCommandStream>,
+    //render_command_stream: Option<RenderCommandStream>,
 
     camera: Camera,
     frame_counter: u32,
@@ -137,7 +138,7 @@ impl<W> DemoApp<W> where W: Window {
         let mut ui_model = DemoUIModel::new(&options);
         let render_options = RendererOptions {
             background_color: None,
-            no_compute: options.no_compute,
+            level: options.renderer_level,
         };
 
         let filter = build_filter(&ui_model);
@@ -161,7 +162,9 @@ impl<W> DemoApp<W> where W: Window {
                                                                   viewport.size());
         let camera = Camera::new(options.mode, scene_metadata.view_box, viewport.size());
 
-        let scene_proxy = SceneProxy::from_scene(built_svg.scene, executor);
+        let scene_proxy = SceneProxy::from_scene(built_svg.scene,
+                                                 options.renderer_level,
+                                                 executor);
 
         let ground_program = GroundProgram::new(&renderer.device, resources);
         let ground_vertex_array = GroundVertexArray::new(&renderer.device,
@@ -189,7 +192,7 @@ impl<W> DemoApp<W> where W: Window {
             svg_tree,
             scene_metadata,
             render_transform: None,
-            render_command_stream: None,
+            //render_command_stream: None,
 
             camera,
             frame_counter: 0,
@@ -265,7 +268,11 @@ impl<W> DemoApp<W> where W: Window {
             subpixel_aa_enabled: self.ui_model.subpixel_aa_effect_enabled,
         };
 
-        self.render_command_stream = Some(self.scene_proxy.build_with_stream(build_options));
+        self.scene_proxy.build(build_options);
+        /*
+        self.render_command_stream =    
+            Some(self.scene_proxy.build_with_stream(build_options, self.renderer.gpu_features()));
+            */
     }
 
     fn handle_events(&mut self, events: Vec<Event>) -> Vec<UIEvent> {
@@ -625,7 +632,7 @@ pub struct Options {
     pub ui: UIVisibility,
     pub background_color: BackgroundColor,
     pub high_performance_gpu: bool,
-    pub no_compute: bool,
+    pub renderer_level: RendererLevel,
     hidden_field_for_future_proofing: (),
 }
 
@@ -638,7 +645,7 @@ impl Default for Options {
             ui: UIVisibility::All,
             background_color: BackgroundColor::Light,
             high_performance_gpu: false,
-            no_compute: false,
+            renderer_level: RendererLevel::D3D11,
             hidden_field_for_future_proofing: (),
         }
     }
@@ -646,7 +653,7 @@ impl Default for Options {
 
 impl Options {
     pub fn command_line_overrides(&mut self) {
-        let matches = App::new("tile-svg")
+        let matches = App::new("demo")
             .arg(
                 Arg::with_name("jobs")
                     .short("j")
@@ -692,10 +699,12 @@ impl Options {
                     .help("Use the high-performance (discrete) GPU, if available")
             )
             .arg(
-                Arg::with_name("no-compute")
-                    .short("c")
-                    .long("no-compute")
-                    .help("Never use compute shaders")
+                Arg::with_name("level")
+                    .long("level")
+                    .short("l")
+                    .help("Set the renderer Direct3D API level")
+                    .possible_values(&["9", "11"])
+                    .default_value("11")
             )
             .arg(
                 Arg::with_name("INPUT")
@@ -734,8 +743,12 @@ impl Options {
             self.high_performance_gpu = true;
         }
 
-        if matches.is_present("no-compute") {
-            self.no_compute = true;
+        let renderer_level = matches.value_of("level")
+                                    .expect("Where's the renderer level option?");
+        if renderer_level == "11" {
+            self.renderer_level = RendererLevel::D3D11;
+        } else if renderer_level == "9" {
+            self.renderer_level = RendererLevel::D3D9;
         }
 
         if let Some(path) = matches.value_of("INPUT") {
@@ -798,7 +811,7 @@ fn build_svg_tree(tree: &Tree, viewport_size: Vector2I, filter: Option<PatternFi
         let path = DrawPath::new(outline, paint_id);
 
         built_svg.scene.pop_render_target();
-        built_svg.scene.push_path(path);
+        built_svg.scene.push_draw_path(path);
     }
 
     return built_svg;

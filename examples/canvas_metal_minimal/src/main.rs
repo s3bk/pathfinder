@@ -46,10 +46,15 @@ fn main() {
     };
 
     // Create a Pathfinder renderer.
-    let mut renderer = Renderer::new(MetalDevice::new(metal_layer),
+    let device = MetalDevice::new(metal_layer);
+    let options = RendererOptions {
+        background_color: Some(ColorF::white()),
+        ..RendererOptions::default_for_device(&device)
+    };
+    let mut renderer = Renderer::new(&device,
                                      &EmbeddedResourceLoader,
                                      DestFramebuffer::full_window(window_size),
-                                     RendererOptions { background_color: Some(ColorF::white()) });
+                                     options);
 
     // Make a canvas. We're going to draw a house.
     let mut canvas = CanvasRenderingContext2D::new(CanvasFontContext::from_system_source(),
@@ -73,7 +78,7 @@ fn main() {
     canvas.stroke_path(path);
 
     // Render the canvas to screen.
-    let scene = SceneProxy::from_scene(canvas.into_scene(), RayonExecutor);
+    let mut scene = SceneProxy::from_scene(canvas.into_scene(), renderer.level(), RayonExecutor);
     scene.build_and_render(&mut renderer, BuildOptions::default());
     renderer.device.present_drawable();
 

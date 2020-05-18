@@ -10,6 +10,7 @@ homepage = "https://github.com/servo/pathfinder"
 
 [dependencies]
 bitflags = "1.0"
+byte-slice-cast = "0.3"
 byteorder = "1.2"
 crossbeam-channel = "0.4"
 fxhash = "0.2"

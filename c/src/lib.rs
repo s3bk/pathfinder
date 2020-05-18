@@ -28,7 +28,7 @@ use pathfinder_resources::ResourceLoader;
 use pathfinder_resources::fs::FilesystemResourceLoader;
 use pathfinder_renderer::concurrent::rayon::RayonExecutor;
 use pathfinder_renderer::concurrent::scene_proxy::SceneProxy;
-use pathfinder_renderer::gpu::options::{DestFramebuffer, RendererOptions};
+use pathfinder_renderer::gpu::options::{DestFramebuffer, RendererLevel, RendererOptions};
 use pathfinder_renderer::gpu::renderer::Renderer;
 use pathfinder_renderer::options::{BuildOptions, RenderTransform};
 use pathfinder_renderer::scene::Scene;
@@ -182,11 +182,13 @@ pub type PFSceneProxyRef = *mut SceneProxy;
 #[repr(C)]
 pub struct PFRendererOptions {
     pub background_color: PFColorF,
+    pub level: PFRendererLevel,
     pub flags: PFRendererOptionsFlags,
 }
 pub type PFRendererOptionsFlags = u8;
 pub type PFBuildOptionsRef = *mut BuildOptions;
 pub type PFRenderTransformRef = *mut RenderTransform;
+pub type PFRendererLevel = u8;
 
 // `canvas`
 
@@ -686,9 +688,12 @@ pub unsafe extern "C" fn PFSceneDestroy(scene: PFSceneRef) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn PFSceneProxyCreateFromSceneAndRayonExecutor(scene: PFSceneRef)
+pub unsafe extern "C" fn PFSceneProxyCreateFromSceneAndRayonExecutor(scene: PFSceneRef,
+                                                                     level: PFRendererLevel)
                                                                      -> PFSceneProxyRef {
-    Box::into_raw(Box::new(SceneProxy::from_scene(*Box::from_raw(scene), RayonExecutor)))
+    Box::into_raw(Box::new(SceneProxy::from_scene(*Box::from_raw(scene),
+                                                  to_rust_renderer_level(level),
+                                                  RayonExecutor)))
 }
 
 #[no_mangle]
@@ -806,8 +811,14 @@ impl PFRendererOptions {
             } else {
                 None
             },
-            // TODO(pcwalton): Expose this in the C API.
-            no_compute: false,
+            level: to_rust_renderer_level(self.level),
         }
+    }
+}
+
+fn to_rust_renderer_level(level: PFRendererLevel) -> RendererLevel {
+    match level {
+        0 => RendererLevel::D3D9,
+        _ => RendererLevel::D3D11,
     }
 }
