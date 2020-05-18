@@ -98,15 +98,15 @@ fn main() {
     window.gl_make_current(&gl_context).unwrap();
 
     // Create a Pathfinder renderer.
-    let mut renderer = Renderer::new(
-        GLDevice::new(GLVersion::GL3, 0),
-        &resource_loader,
-        DestFramebuffer::full_window(pixel_size),
-        RendererOptions {
-            background_color: Some(stage.background_color()),
-            ..RendererOptions::default()
-        }
-    );
+    let device = GLDevice::new(GLVersion::GL3, 0);
+    let options = RendererOptions {
+        background_color: Some(stage.background_color()),
+        ..RendererOptions::default_for_device(&device)
+    };
+    let mut renderer = Renderer::new(device,
+                                     &resource_loader,
+                                     DestFramebuffer::full_window(pixel_size),
+                                     options);
     // Clear to swf stage background color.
     let mut scene = Scene::new();
     scene.set_view_box(RectF::new(Vector2F::zero(),
@@ -115,7 +115,7 @@ fn main() {
     draw_paths_into_scene(&library, &mut scene);
 
     // Render the canvas to screen.
-    let scene = SceneProxy::from_scene(scene, RayonExecutor);
+    let mut scene = SceneProxy::from_scene(scene, renderer.level(), RayonExecutor);
     let mut build_options = BuildOptions::default();
     let scale_transform = Transform2F::from_scale(device_pixel_ratio);
     build_options.transform = RenderTransform::Transform2D(scale_transform);

@@ -85,13 +85,14 @@ fn main() {
     let pathfinder_device = GLDevice::new(GLVersion::GL3, default_framebuffer);
 
     // Create our renderers.
+    let options = RendererOptions {
+        background_color: Some(ColorF::white()),
+        ..RendererOptions::default_for_device(&pathfinder_device)
+    };
     let renderer = Renderer::new(pathfinder_device,
                                  &EmbeddedResourceLoader,
                                  DestFramebuffer::full_window(framebuffer_size),
-                                 RendererOptions {
-                                     background_color: Some(ColorF::white()),
-                                     ..RendererOptions::default()
-                                 });
+                                 options);
     let window_size = vec2i(window_size.width, window_size.height);
     let mut moire_renderer = MoireRenderer::new(renderer, window_size, framebuffer_size);
 
@@ -129,10 +130,11 @@ struct MoireRenderer {
 impl MoireRenderer {
     fn new(renderer: Renderer<GLDevice>, window_size: Vector2I, drawable_size: Vector2I)
            -> MoireRenderer {
+        let level = renderer.level();
         MoireRenderer {
             renderer,
             font_context: CanvasFontContext::from_system_source(),
-            scene: SceneProxy::new(RayonExecutor),
+            scene: SceneProxy::new(level, RayonExecutor),
             frame: 0,
             window_size,
             drawable_size,
@@ -157,7 +159,7 @@ impl MoireRenderer {
         // Clear to background color.
         self.renderer.set_options(RendererOptions {
             background_color: Some(background_color),
-            ..RendererOptions::default()
+            level: self.renderer.level(),
         });
 
         // Make a canvas.

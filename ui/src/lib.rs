@@ -189,6 +189,7 @@ impl<D> UIPresenter<D> where D: Device {
             ],
             textures: &[],
             images: &[],
+            storage_buffers: &[],
             viewport: RectI::new(Vector2I::default(), self.framebuffer_size),
             options: RenderOptions {
                 blend: Some(alpha_blend_state()),
@@ -414,6 +415,7 @@ impl<D> UIPresenter<D> where D: Device {
             primitive: Primitive::Triangles,
             textures: &[(&self.texture_program.texture, &texture)],
             images: &[],
+            storage_buffers: &[],
             uniforms: &[
                 (&self.texture_program.framebuffer_size_uniform,
                  UniformData::Vec2(self.framebuffer_size.0.to_f32x2())),

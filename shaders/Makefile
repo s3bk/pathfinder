@@ -5,6 +5,8 @@ EMPTY=
 SHADERS=\
 	blit.fs.glsl \
 	blit.vs.glsl \
+	blit_buffer.fs.glsl \
+	blit_buffer.vs.glsl \
 	clear.fs.glsl \
 	clear.vs.glsl \
 	debug_solid.fs.glsl \
@@ -21,18 +23,28 @@ SHADERS=\
 	stencil.vs.glsl \
 	tile.fs.glsl \
 	tile.vs.glsl \
-	tile_clip.fs.glsl \
-	tile_clip.vs.glsl \
+	tile_clip_combine.fs.glsl \
+	tile_clip_combine.vs.glsl \
+	tile_clip_copy.fs.glsl \
+	tile_clip_copy.vs.glsl \
 	tile_copy.fs.glsl \
 	tile_copy.vs.glsl \
 	$(EMPTY)
 
 COMPUTE_SHADERS=\
+	bin.cs.glsl \
+	dice.cs.glsl \
 	fill.cs.glsl \
+	init.cs.glsl \
+	propagate.cs.glsl \
+	sort.cs.glsl \
+	tile.cs.glsl \
 	$(EMPTY)
 
 INCLUDES=\
-	fill.inc.glsl \
+	fill_area.inc.glsl \
+	tile_fragment.inc.glsl \
+	tile_vertex.inc.glsl \
 	$(EMPTY)
 
 OUT=\

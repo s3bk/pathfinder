@@ -1,6 +1,6 @@
 #version 330
 
-// pathfinder/shaders/tile_clip.vs.glsl
+// pathfinder/shaders/tile_clip_combine.fs.glsl
 //
 // Copyright © 2020 The Pathfinder Project Developers.
 //
@@ -16,18 +16,16 @@ precision highp float;
 precision highp sampler2D;
 #endif
 
-in ivec2 aTileOffset;
-in ivec2 aDestTileOrigin;
-in ivec2 aSrcTileOrigin;
-in int aSrcBackdrop;
+uniform sampler2D uSrc;
 
-out vec2 vTexCoord;
-out float vBackdrop;
+in vec2 vTexCoord0;
+in float vBackdrop0;
+in vec2 vTexCoord1;
+in float vBackdrop1;
+
+out vec4 oFragColor;
 
 void main() {
-    vec2 destPosition = vec2(aDestTileOrigin + aTileOffset) / vec2(256.0);
-    vec2 srcPosition = vec2(aSrcTileOrigin + aTileOffset) / vec2(256.0);
-    vTexCoord = srcPosition;
-    vBackdrop = float(aSrcBackdrop);
-    gl_Position = vec4(mix(vec2(-1.0), vec2(1.0), destPosition), 0.0, 1.0);
+    oFragColor = min(abs(texture(uSrc, vTexCoord0) + vBackdrop0),
+                     abs(texture(uSrc, vTexCoord1) + vBackdrop1));
 }

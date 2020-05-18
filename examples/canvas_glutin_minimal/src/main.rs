@@ -48,13 +48,15 @@ fn main() {
     gl::load_with(|name| gl_context.get_proc_address(name) as *const _);
 
     // Create a Pathfinder renderer.
-    let mut renderer = Renderer::new(GLDevice::new(GLVersion::GL3, 0),
+    let device = GLDevice::new(GLVersion::GL3, 0);
+    let options = RendererOptions {
+        background_color: Some(ColorF::white()),
+        ..RendererOptions::default_for_device(&device)
+    };
+    let mut renderer = Renderer::new(device,
                                      &EmbeddedResourceLoader,
                                      DestFramebuffer::full_window(window_size),
-                                     RendererOptions {
-                                         background_color: Some(ColorF::white()),
-                                         ..RendererOptions::default()
-                                     });
+                                     options);
 
     // Make a canvas. We're going to draw a house.
     let font_context = CanvasFontContext::from_system_source();
@@ -78,7 +80,9 @@ fn main() {
     canvas.stroke_path(path);
 
     // Render the canvas to screen.
-    let scene = SceneProxy::from_scene(canvas.into_canvas().into_scene(), RayonExecutor);
+    let mut scene = SceneProxy::from_scene(canvas.into_canvas().into_scene(),
+                                           renderer.level(),
+                                           RayonExecutor);
     scene.build_and_render(&mut renderer, BuildOptions::default());
     gl_context.swap_buffers().unwrap();
 

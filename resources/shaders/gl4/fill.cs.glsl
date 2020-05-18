@@ -54,46 +54,57 @@ layout(local_size_x = 16, local_size_y = 4)in;
 
 uniform writeonly image2D uDest;
 uniform sampler2D uAreaLUT;
-uniform int uFirstTileIndex;
+uniform ivec2 uTileRange;
 
 layout(std430, binding = 0)buffer bFills {
-    restrict readonly uvec2 iFills[];
+    restrict readonly uint iFills[];
 };
 
-layout(std430, binding = 1)buffer bNextFills {
-    restrict readonly int iNextFills[];
+layout(std430, binding = 1)buffer bTileLinkMap {
+
+
+    restrict readonly int iTileLinkMap[];
 };
 
-layout(std430, binding = 2)buffer bFillTileMap {
-    restrict readonly int iFillTileMap[];
+layout(std430, binding = 2)buffer bTiles {
+    restrict readonly int iTiles[];
 };
 
 void main(){
     ivec2 tileSubCoord = ivec2(gl_LocalInvocationID . xy)* ivec2(1, 4);
-    uint tileIndexOffset = gl_WorkGroupID . z;
 
-    uint tileIndex = tileIndexOffset + uint(uFirstTileIndex);
 
-    int fillIndex = iFillTileMap[tileIndex];
+    uint tileIndexOffset = gl_WorkGroupID . x |(gl_WorkGroupID . y << 15);
+    uint tileIndex = tileIndexOffset + uint(uTileRange . x);
+    if(tileIndex >= uTileRange . y)
+        return;
+
+    int fillIndex = iTileLinkMap[tileIndex * 2 + 0];
     if(fillIndex < 0)
         return;
 
     vec4 coverages = vec4(0.0);
+    int iteration = 0;
     do {
-        uvec2 fill = iFills[fillIndex];
-        vec2 from = vec2(fill . y & 0xf,(fill . y >> 4u)& 0xf)+
-                    vec2(fill . x & 0xff,(fill . x >> 8u)& 0xff)/ 256.0;
-        vec2 to = vec2((fill . y >> 8u)& 0xf,(fill . y >> 12u)& 0xf)+
-                    vec2((fill . x >> 16u)& 0xff,(fill . x >> 24u)& 0xff)/ 256.0;
+        uint fillFrom = iFills[fillIndex * 3 + 0], fillTo = iFills[fillIndex * 3 + 1];
+        vec4 lineSegment = vec4(fillFrom & 0xffff, fillFrom >> 16,
+                                fillTo & 0xffff, fillTo >> 16)/ 256.0;
 
-        coverages += computeCoverage(from -(vec2(tileSubCoord)+ vec2(0.5)),
-                                     to -(vec2(tileSubCoord)+ vec2(0.5)),
+        coverages += computeCoverage(lineSegment . xy -(vec2(tileSubCoord)+ vec2(0.5)),
+                                     lineSegment . zw -(vec2(tileSubCoord)+ vec2(0.5)),
                                      uAreaLUT);
 
-        fillIndex = iNextFills[fillIndex];
-    } while(fillIndex >= 0);
+        fillIndex = int(iFills[fillIndex * 3 + 2]);
+        iteration ++;
+    } while(fillIndex >= 0 && iteration < 1024);
 
-    ivec2 tileOrigin = ivec2(tileIndex & 0xff,(tileIndex >> 8u)& 0xff)* ivec2(16, 4);
+
+
+    uint alphaTileIndex = iTiles[tileIndex * 4 + 1];
+
+    ivec2 tileOrigin = ivec2(16, 4)*
+        ivec2(alphaTileIndex & 0xff,
+              (alphaTileIndex >> 8u)& 0xff +(((alphaTileIndex >> 16u)& 0xff)<< 8u));
     ivec2 destCoord = tileOrigin + ivec2(gl_LocalInvocationID . xy);
     imageStore(uDest, destCoord, coverages);
 }
