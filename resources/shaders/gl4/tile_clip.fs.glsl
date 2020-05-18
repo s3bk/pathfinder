@@ -27,5 +27,6 @@ out vec4 oFragColor;
 
 void main(){
     oFragColor = clamp(abs(texture(uSrc, vTexCoord)+ vBackdrop), 0.0, 1.0);
+
 }
 

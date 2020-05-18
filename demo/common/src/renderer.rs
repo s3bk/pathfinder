@@ -91,7 +91,7 @@ impl<W> DemoApp<W> where W: Window {
         };
         self.renderer.set_options(RendererOptions {
             background_color: clear_color,
-            no_compute: self.options.no_compute,
+            level: self.renderer.level(),
         });
 
         scene_count
@@ -233,6 +233,7 @@ impl<W> DemoApp<W> where W: Window {
             primitive: Primitive::Triangles,
             textures: &[],
             images: &[],
+            storage_buffers: &[],
             uniforms: &[
                 (&self.ground_program.transform_uniform,
                  UniformData::from_transform_3d(&transform)),
@@ -258,19 +259,14 @@ impl<W> DemoApp<W> where W: Window {
             self.renderer.enable_depth();
         }
 
-        self.renderer.begin_scene();
-
         // Issue render commands!
-        for command in self.render_command_stream.as_mut().unwrap() {
-            self.renderer.render_command(&command);
-        }
+        self.scene_proxy.render(&mut self.renderer);
 
         self.current_frame
             .as_mut()
             .unwrap()
             .scene_stats
             .push(self.renderer.stats);
-        self.renderer.end_scene();
     }
 
     pub fn take_raster_screenshot(&mut self, path: PathBuf) {
