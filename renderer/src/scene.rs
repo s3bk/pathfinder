@@ -94,6 +94,18 @@ impl Scene {
         self.display_list.push(DisplayItem::PopRenderTarget);
     }
 
+    pub fn transform(&mut self, transform: &Transform2F) {
+        for paint in &mut self.palette.paints {
+            paint.apply_transform(transform);
+        }
+        for clip_path in &mut self.clip_paths {
+            clip_path.transform(transform);
+        }
+        for draw_path in &mut scene.paths {
+            path.outline.transform(transform);
+        }
+    }
+
     pub fn append_scene(&mut self, scene: Scene) {
         let MergedPaletteInfo {
             render_target_mapping,
