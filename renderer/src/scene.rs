@@ -99,10 +99,10 @@ impl Scene {
             paint.apply_transform(transform);
         }
         for clip_path in &mut self.clip_paths {
-            clip_path.transform(transform);
+            clip_path.outline.transform(transform);
         }
-        for draw_path in &mut scene.paths {
-            path.outline.transform(transform);
+        for draw_path in &mut self.paths {
+            draw_path.outline.transform(transform);
         }
     }
 

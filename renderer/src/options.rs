@@ -31,7 +31,7 @@ where
         (*self)(command)
     }
 }
-impl RenderCommandListener for Box<dyn RenderCommandListener> {
+impl<'a> RenderCommandListener for Box<dyn RenderCommandListener + 'a> {
     #[inline]
     fn send(&self, command: RenderCommand) {
         (**self).send(command)
