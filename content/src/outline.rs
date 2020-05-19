@@ -24,13 +24,11 @@ use std::f32::consts::PI;
 use std::fmt::{self, Debug, Formatter};
 use std::mem;
 
-#[derive(Clone)]
 pub struct Outline {
     pub(crate) contours: Vec<Contour>,
     pub(crate) bounds: RectF,
 }
 
-#[derive(Clone)]
 pub struct Contour {
     pub(crate) points: Vec<Vector2F>,
     pub(crate) flags: Vec<PointFlags>,
@@ -234,6 +232,19 @@ impl Debug for Outline {
             contour.fmt(formatter)?;
         }
         Ok(())
+    }
+}
+
+impl Clone for Outline {
+    fn clone(&self) -> Outline {
+        Outline {
+            contours: self.contours.clone(),
+            bounds: self.bounds
+        }
+    }
+    fn clone_from(&mut self, source: &Outline) {
+        self.contours.clone_from(&source.contours);
+        self.bounds = source.bounds;
     }
 }
 
@@ -614,6 +625,23 @@ impl Contour {
             None => self.bounds,
             Some(bounds) => bounds.union_rect(self.bounds),
         })
+    }
+}
+
+impl Clone for Contour {
+    fn clone(&self) -> Contour {
+        Contour {
+            points: self.points.clone(),
+            flags: self.flags.clone(),
+            bounds: self.bounds,
+            closed: self.closed
+        }
+    }
+    fn clone_from(&mut self, source: &Contour) {
+        self.points.clone_from(&source.points);
+        self.flags.clone_from(&source.flags);
+        self.bounds = source.bounds;
+        self.closed = source.closed;
     }
 }
 
