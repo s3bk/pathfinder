@@ -45,6 +45,7 @@ features = ["debug_ui"]
 
 [dependencies.pathfinder_resources]
 path = "../../resources"
+features = ["demo"]
 
 [dependencies.pathfinder_simd]
 path = "../../simd"
