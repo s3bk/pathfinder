@@ -134,6 +134,12 @@ impl Segment {
     }
 
     #[inline]
+    pub fn as_quadratic_segment(&self) -> QuadraticSegment {
+        debug_assert!(self.is_cubic());
+        QuadraticSegment(self)
+    }
+
+    #[inline]
     pub fn as_cubic_segment(&self) -> CubicSegment {
         debug_assert!(self.is_cubic());
         CubicSegment(self)
@@ -198,12 +204,18 @@ impl Segment {
 
     #[inline]
     pub fn split(&self, t: f32) -> (Segment, Segment) {
-        // FIXME(pcwalton): Don't degree elevate!
-        if self.is_line() {
-            let (before, after) = self.as_line_segment().split(t);
-            (Segment::line(before), Segment::line(after))
-        } else {
-            self.to_cubic().as_cubic_segment().split(t)
+        match self.kind {
+            SegmentKind::None => (Segment::none(), Segment::none()),
+            SegmentKind::Line => {
+                let (before, after) = self.as_line_segment().split(t);
+                (Segment::line(before), Segment::line(after))
+            }
+            SegmentKind::Quadratic => {
+                self.as_quadratic_segment().split(t)
+            }
+            SegmentKind::Cubic => {
+                self.as_cubic_segment().split(t)
+            }
         }
     }
 
@@ -254,6 +266,64 @@ bitflags! {
     }
 }
 
+#[inline]
+fn lerp(a: F32x4, b: F32x4, t: F32x4) -> F32x4 {
+    a + t * (b - a)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct QuadraticSegment<'s>(pub &'s Segment);
+
+impl<'s> QuadraticSegment<'s> {
+    #[inline]
+    pub fn split(self, t: f32) -> (Segment, Segment) {
+        let (baseline0, ctrl0, baseline1, ctrl1);
+        if t <= 0.0 {
+            let from = &self.0.baseline.from();
+            baseline0 = LineSegment2F::new(*from, *from);
+            ctrl0 = LineSegment2F::new(*from, *from);
+            baseline1 = self.0.baseline;
+            ctrl1 = self.0.ctrl;
+        } else if t >= 1.0 {
+            let to = &self.0.baseline.to();
+            baseline0 = self.0.baseline;
+            ctrl0 = self.0.ctrl;
+            baseline1 = LineSegment2F::new(*to, *to);
+            ctrl1 = LineSegment2F::new(*to, *to);
+        } else {
+            let tttt = F32x4::splat(t);
+
+            let (p0p2, p1px) = (self.0.baseline.0, self.0.ctrl.0);
+            let p0p1 = p0p2.concat_xy_xy(p1px);
+            let p1p2 = p1px.concat_xy_zw(p0p2);
+
+            let p01p12 = lerp(p0p1, p1p2, tttt);
+            let p12 = p01p12.zwzw();
+            let p012 = lerp(p01p12, p12, tttt);
+
+            baseline0 = LineSegment2F(p0p2.concat_xy_xy(p012));
+            ctrl0 = LineSegment2F(p012);
+            baseline1 = LineSegment2F(p012.concat_xy_zw(p0p2));
+            ctrl1 = LineSegment2F(p012);
+        }
+
+        (
+            Segment {
+                baseline: baseline0,
+                ctrl: ctrl0,
+                kind: SegmentKind::Quadratic,
+                flags: self.0.flags & SegmentFlags::FIRST_IN_SUBPATH,
+            },
+            Segment {
+                baseline: baseline1,
+                ctrl: ctrl1,
+                kind: SegmentKind::Quadratic,
+                flags: self.0.flags & SegmentFlags::CLOSES_SUBPATH,
+            },
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct CubicSegment<'s>(pub &'s Segment);
 
@@ -291,17 +361,14 @@ impl<'s> CubicSegment<'s> {
             let (p0p3, p1p2) = (self.0.baseline.0, self.0.ctrl.0);
             let p0p1 = p0p3.concat_xy_xy(p1p2);
 
-            // p01 = lerp(p0, p1, t), p12 = lerp(p1, p2, t), p23 = lerp(p2, p3, t)
-            let p01p12 = p0p1 + tttt * (p1p2 - p0p1);
-            let pxxp23 = p1p2 + tttt * (p0p3 - p1p2);
+            let p01p12 = lerp(p0p1, p1p2, tttt);
+            let pxxp23 = lerp(p1p2, p0p3, tttt);
             let p12p23 = p01p12.concat_zw_zw(pxxp23);
 
-            // p012 = lerp(p01, p12, t), p123 = lerp(p12, p23, t)
-            let p012p123 = p01p12 + tttt * (p12p23 - p01p12);
+            let p012p123 = lerp(p01p12, p12p23, tttt);
             let p123 = p012p123.zwzw();
 
-            // p0123 = lerp(p012, p123, t)
-            let p0123 = p012p123 + tttt * (p123 - p012p123);
+            let p0123 = lerp(p012p123, p123, tttt);
 
             baseline0 = LineSegment2F(p0p3.concat_xy_xy(p0123));
             ctrl0 = LineSegment2F(p01p12.concat_xy_xy(p012p123));
