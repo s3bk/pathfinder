@@ -55,6 +55,7 @@ use pathfinder_gpu::{VertexAttrDescriptor, VertexAttrType};
 use pathfinder_resources::ResourceLoader;
 use pathfinder_simd::default::{F32x2, F32x4, I32x2};
 use std::cell::{Cell, RefCell};
+use std::convert::TryInto;
 use std::mem;
 use std::ops::Range;
 use std::ptr;
@@ -74,6 +75,7 @@ pub struct MetalDevice {
     samplers: Vec<SamplerState>,
     shared_event: SharedEvent,
     shared_event_listener: SharedEventListener,
+    compute_fence: RefCell<Option<Fence>>,
     next_timer_query_event_value: Cell<u64>,
 }
 
@@ -150,6 +152,7 @@ impl MetalDevice {
             samplers,
             shared_event,
             shared_event_listener: SharedEventListener::new(),
+            compute_fence: RefCell::new(None),
             next_timer_query_event_value: Cell::new(1),
         }
     }
@@ -189,15 +192,25 @@ pub struct MetalTexture {
 pub struct MetalTextureDataReceiver(Arc<MetalTextureDataReceiverInfo>);
 
 struct MetalTextureDataReceiverInfo {
-    mutex: Mutex<MetalTextureDataReceiverState>,
+    mutex: Mutex<MetalDataReceiverState<TextureData>>,
     cond: Condvar,
     texture: Texture,
     viewport: RectI,
 }
 
-enum MetalTextureDataReceiverState {
+#[derive(Clone)]
+pub struct MetalBufferDataReceiver(Arc<MetalBufferDataReceiverInfo>);
+
+struct MetalBufferDataReceiverInfo {
+    mutex: Mutex<MetalDataReceiverState<Vec<u8>>>,
+    cond: Condvar,
+    buffer: Buffer,
+    range: Range<usize>,
+}
+
+enum MetalDataReceiverState<T> {
     Pending,
-    Downloaded(TextureData),
+    Downloaded(T),
     Finished,
 }
 
@@ -288,6 +301,7 @@ pub struct MetalVertexArray {
 
 impl Device for MetalDevice {
     type Buffer = MetalBuffer;
+    type BufferDataReceiver = MetalBufferDataReceiver;
     type Fence = MetalFence;
     type Framebuffer = MetalFramebuffer;
     type ImageParameter = MetalImageParameter;
@@ -510,6 +524,7 @@ impl Device for MetalDevice {
                 MTLVertexFormat::UCharNormalized
             }
             (VertexAttrClass::Int, VertexAttrType::I16, 1) => MTLVertexFormat::Short,
+            (VertexAttrClass::Int, VertexAttrType::I32, 1) => MTLVertexFormat::Int,
             (VertexAttrClass::Int, VertexAttrType::U16, 1) => MTLVertexFormat::UShort,
             (VertexAttrClass::FloatNorm, VertexAttrType::U16, 1) => {
                 MTLVertexFormat::UShortNormalized
@@ -638,7 +653,7 @@ impl Device for MetalDevice {
         let texture = self.render_target_color_texture(target);
         let texture_data_receiver =
             MetalTextureDataReceiver(Arc::new(MetalTextureDataReceiverInfo {
-                mutex: Mutex::new(MetalTextureDataReceiverState::Pending),
+                mutex: Mutex::new(MetalDataReceiverState::Pending),
                 cond: Condvar::new(),
                 texture,
                 viewport,
@@ -651,6 +666,42 @@ impl Device for MetalDevice {
 
         self.synchronize_texture(&texture_data_receiver.0.texture, block.copy());
         texture_data_receiver
+    }
+
+    fn read_buffer(&self, buffer: &MetalBuffer, _: BufferTarget, range: Range<usize>)
+                   -> MetalBufferDataReceiver {
+        let buffer = buffer.buffer.borrow();
+        let buffer = buffer.as_ref().unwrap();
+
+        let buffer_data_receiver = MetalBufferDataReceiver(Arc::new(MetalBufferDataReceiverInfo {
+            mutex: Mutex::new(MetalDataReceiverState::Pending),
+            cond: Condvar::new(),
+            buffer: (*buffer).clone(),
+            range,
+        }));
+
+        let buffer_data_receiver_for_block = buffer_data_receiver.clone();
+        let block = ConcreteBlock::new(move |_| buffer_data_receiver_for_block.download());
+
+        self.synchronize_buffer(buffer, block.copy());
+        buffer_data_receiver
+    }
+
+    fn try_recv_buffer(&self, buffer_data_receiver: &MetalBufferDataReceiver) -> Option<Vec<u8>> {
+        try_recv_data_with_guard(&mut buffer_data_receiver.0.mutex.lock().unwrap())
+    }
+
+    fn recv_buffer(&self, buffer_data_receiver: &MetalBufferDataReceiver) -> Vec<u8> {
+        // TODO(pcwalton): Expose this async interface!
+        let mut guard = buffer_data_receiver.0.mutex.lock().unwrap();
+
+        loop {
+            let buffer_data = try_recv_data_with_guard(&mut guard);
+            if let Some(buffer_data) = buffer_data {
+                return buffer_data
+            }
+            guard = buffer_data_receiver.0.cond.wait(guard).unwrap();
+        }
     }
 
     fn begin_commands(&self) {
@@ -690,6 +741,7 @@ impl Device for MetalDevice {
                                render_state: &RenderState<MetalDevice>) {
         let encoder = self.prepare_to_draw(render_state);
         let primitive = render_state.primitive.to_metal_primitive();
+
         let index_type = MTLIndexType::UInt32;
         let index_buffer = render_state.vertex_array
                                        .index_buffer
@@ -697,6 +749,7 @@ impl Device for MetalDevice {
         let index_buffer = index_buffer.as_ref().expect("No index buffer bound to VAO!");
         let index_buffer = index_buffer.buffer.borrow();
         let index_buffer = index_buffer.as_ref().expect("Index buffer not allocated!");
+
         encoder.draw_indexed_primitives_instanced(primitive,
                                                   index_count as u64,
                                                   index_type,
@@ -756,6 +809,11 @@ impl Device for MetalDevice {
         };
 
         encoder.dispatch_thread_groups(size.to_metal_size(), local_size);
+
+        let fence = self.device.new_fence();
+        encoder.update_fence(&fence);
+        *self.compute_fence.borrow_mut() = Some(fence);
+
         encoder.end_encoding();
     }
 
@@ -824,13 +882,13 @@ impl Device for MetalDevice {
     }
 
     fn try_recv_texture_data(&self, receiver: &MetalTextureDataReceiver) -> Option<TextureData> {
-        try_recv_texture_data_with_guard(&mut receiver.0.mutex.lock().unwrap())
+        try_recv_data_with_guard(&mut receiver.0.mutex.lock().unwrap())
     }
 
     fn recv_texture_data(&self, receiver: &MetalTextureDataReceiver) -> TextureData {
         let mut guard = receiver.0.mutex.lock().unwrap();
         loop {
-            let texture_data = try_recv_texture_data_with_guard(&mut guard);
+            let texture_data = try_recv_data_with_guard(&mut guard);
             if let Some(texture_data) = texture_data {
                 return texture_data
             }
@@ -1112,6 +1170,13 @@ impl MetalDevice {
         let render_pass_descriptor = self.create_render_pass_descriptor(render_state);
 
         let encoder = command_buffer.new_render_command_encoder(&render_pass_descriptor).retain();
+
+        // Wait on the previous compute command, if any.
+        let compute_fence = self.compute_fence.borrow();
+        if let Some(ref compute_fence) = *compute_fence {
+            encoder.wait_for_fence_before_stages(compute_fence, MTLRenderStage::Vertex);
+        }
+
         self.set_viewport(&encoder, &render_state.viewport);
 
         let program = match render_state.program {
@@ -1264,6 +1329,30 @@ impl MetalDevice {
                                                             Some(&image.texture));
             }
         }
+
+        // Set storage buffers.
+        for &(storage_buffer_id, storage_buffer_binding) in render_state.storage_buffers {
+            self.populate_storage_buffer_indices_if_necessary(storage_buffer_id,
+                                                              &render_state.program);
+
+            let indices = storage_buffer_id.indices.borrow_mut();
+            let indices = indices.as_ref().unwrap();
+            let (vertex_indices, fragment_indices) = match indices.0 {
+                ProgramKind::Raster { ref vertex, ref fragment } => (vertex, fragment),
+                _ => unreachable!(),
+            };
+
+            if let Some(vertex_index) = *vertex_indices {
+                if let Some(ref buffer) = *storage_buffer_binding.buffer.borrow() {
+                    render_command_encoder.set_vertex_buffer(vertex_index.0, Some(buffer), 0);
+                }
+            }
+            if let Some(fragment_index) = *fragment_indices {
+                if let Some(ref buffer) = *storage_buffer_binding.buffer.borrow() {
+                    render_command_encoder.set_fragment_buffer(fragment_index.0, Some(buffer), 0);
+                }
+            }
+        }
     }
 
     fn set_compute_uniforms(&self,
@@ -1339,7 +1428,6 @@ impl MetalDevice {
                     compute_command_encoder.set_buffer(index.0, Some(buffer), 0);
                 }
             }
-
         }
     }
 
@@ -1609,12 +1697,28 @@ impl MetalDevice {
     }
 
     fn synchronize_texture(&self, texture: &Texture, block: RcBlock<(*mut Object,), ()>) {
-        let command_buffers = self.command_buffers.borrow();
-        let command_buffer = command_buffers.last().unwrap();
-        let encoder = command_buffer.new_blit_command_encoder();
-        encoder.synchronize_resource(&texture);
-        command_buffer.add_completed_handler(block);
-        encoder.end_encoding();
+        {
+            let command_buffers = self.command_buffers.borrow();
+            let command_buffer = command_buffers.last().unwrap();
+            let encoder = command_buffer.new_blit_command_encoder();
+            encoder.synchronize_resource(&texture);
+            command_buffer.add_completed_handler(block);
+            encoder.end_encoding();
+        }
+
+        self.end_commands();
+        self.begin_commands();
+    }
+
+    fn synchronize_buffer(&self, buffer: &Buffer, block: RcBlock<(*mut Object,), ()>) {
+        {
+            let command_buffers = self.command_buffers.borrow();
+            let command_buffer = command_buffers.last().unwrap();
+            let encoder = command_buffer.new_blit_command_encoder();
+            encoder.synchronize_resource(buffer);
+            command_buffer.add_completed_handler(block);
+            encoder.end_encoding();
+        }
 
         self.end_commands();
         self.begin_commands();
@@ -1935,21 +2039,34 @@ impl MetalTextureDataReceiver {
         };
 
         let mut guard = self.0.mutex.lock().unwrap();
-        *guard = MetalTextureDataReceiverState::Downloaded(texture_data);
+        *guard = MetalDataReceiverState::Downloaded(texture_data);
         self.0.cond.notify_all();
     }
 }
 
-fn try_recv_texture_data_with_guard(guard: &mut MutexGuard<MetalTextureDataReceiverState>)
-                                    -> Option<TextureData> {
+impl MetalBufferDataReceiver {
+    fn download(&self) {
+        let contents = self.0.buffer.contents() as *const u8;
+        let length = self.0.buffer.length();
+        unsafe {
+            let contents = slice::from_raw_parts(contents, length.try_into().unwrap());
+            let contents = contents[self.0.range.start..self.0.range.end].to_vec();
+            let mut guard = self.0.mutex.lock().unwrap();
+            *guard = MetalDataReceiverState::Downloaded(contents);
+            self.0.cond.notify_all();
+        }
+    }
+}
+
+fn try_recv_data_with_guard<T>(guard: &mut MutexGuard<MetalDataReceiverState<T>>) -> Option<T> {
     match **guard {
-        MetalTextureDataReceiverState::Pending | MetalTextureDataReceiverState::Finished => {
+        MetalDataReceiverState::Pending | MetalDataReceiverState::Finished => {
             return None
         }
-        MetalTextureDataReceiverState::Downloaded(_) => {}
+        MetalDataReceiverState::Downloaded(_) => {}
     }
-    match mem::replace(&mut **guard, MetalTextureDataReceiverState::Finished) {
-        MetalTextureDataReceiverState::Downloaded(texture_data) => Some(texture_data),
+    match mem::replace(&mut **guard, MetalDataReceiverState::Finished) {
+        MetalDataReceiverState::Downloaded(texture_data) => Some(texture_data),
         _ => unreachable!(),
     }
 }
@@ -2046,6 +2163,14 @@ impl SharedEventListener {
     }
 }
 
+struct Fence(*mut Object);
+
+impl Drop for Fence {
+    fn drop(&mut self) {
+        unsafe { msg_send![self.0, release] }
+    }
+}
+
 struct VertexAttributeArray(*mut Object);
 
 impl Drop for VertexAttributeArray {
@@ -2111,6 +2236,7 @@ trait DeviceExt {
                                                       -> (RenderPipelineState,
                                                           RenderPipelineReflection);
     fn new_shared_event(&self) -> SharedEvent;
+    fn new_fence(&self) -> Fence;
 }
 
 impl DeviceExt for metal::Device {
@@ -2142,6 +2268,10 @@ impl DeviceExt for metal::Device {
 
     fn new_shared_event(&self) -> SharedEvent {
         unsafe { SharedEvent(msg_send![self.as_ptr(), newSharedEvent]) }
+    }
+
+    fn new_fence(&self) -> Fence {
+        unsafe { Fence(msg_send![self.as_ptr(), newFence]) }
     }
 }
 
@@ -2202,6 +2332,45 @@ impl StructMemberExt for StructMemberRef {
     fn pointer_type(&self) -> *mut Object {
         unsafe { msg_send![self.as_ptr(), pointerType] }
     }
+}
+
+trait ComputeCommandEncoderExt {
+    fn update_fence(&self, fence: &Fence);
+    fn wait_for_fence(&self, fence: &Fence);
+}
+
+impl ComputeCommandEncoderExt for ComputeCommandEncoderRef {
+    fn update_fence(&self, fence: &Fence) {
+        unsafe { msg_send![self.as_ptr(), updateFence:fence.0] }
+    }
+
+    fn wait_for_fence(&self, fence: &Fence) {
+        unsafe { msg_send![self.as_ptr(), waitForFence:fence.0] }
+    }
+}
+
+trait RenderCommandEncoderExt {
+    fn update_fence_before_stages(&self, fence: &Fence, stages: MTLRenderStage);
+    fn wait_for_fence_before_stages(&self, fence: &Fence, stages: MTLRenderStage);
+}
+
+impl RenderCommandEncoderExt for RenderCommandEncoderRef {
+    fn update_fence_before_stages(&self, fence: &Fence, stages: MTLRenderStage) {
+        unsafe { msg_send![self.as_ptr(), updateFence:fence.0 beforeStages:stages] }
+    }
+
+    fn wait_for_fence_before_stages(&self, fence: &Fence, stages: MTLRenderStage) {
+        unsafe {
+            msg_send![self.as_ptr(), waitForFence:fence.0 beforeStages:stages]
+        }
+    }
+}
+
+#[repr(u32)]
+enum MTLRenderStage {
+    Vertex = 0,
+    #[allow(dead_code)]
+    Fragment = 1,
 }
 
 // Memory management helpers

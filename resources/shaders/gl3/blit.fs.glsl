@@ -26,6 +26,7 @@ out vec4 oFragColor;
 
 void main(){
     vec4 color = texture(uSrc, vTexCoord);
-    oFragColor = vec4(color . rgb * color . a, color . a);
+
+    oFragColor = color;
 }
 

@@ -156,6 +156,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b41b7ea54a0c9d92199de89e20e58d49f02f8e699814ef3fdf266f6f748d15c7"
 
 [[package]]
+name = "base64"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53d1ccbaf7d9ec9537465a97bf19edc1a4e158ecb49fc16178202238c569cc42"
+
+[[package]]
 name = "bitflags"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -196,9 +202,15 @@ checksum = "39092a32794787acd8525ee150305ff051b0aa6cc2abaf193924f5ab05425f39"
 
 [[package]]
 name = "bumpalo"
-version = "3.3.0"
+version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5356f1d23ee24a1f785a56d1d1a5f0fd5b0f6a0c0fb2412ce11da71649ab78f6"
+checksum = "2e8c087f005730276d1096a652e92a8bacee2e2472bcc9715a74d2bec38b5820"
+
+[[package]]
+name = "byte-slice-cast"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0a5e3906bcbf133e33c1d4d95afc664ad37fbdb9f6568d8043e7ea8c27d93d3"
 
 [[package]]
 name = "bytemuck"
@@ -346,11 +358,11 @@ checksum = "2db2df1ebc842c41fd2c4ae5b5a577faf63bd5151b953db752fc686812bee318"
 dependencies = [
  "clap",
  "log",
- "proc-macro2 1.0.17",
+ "proc-macro2 1.0.18",
  "quote 1.0.6",
  "serde",
  "serde_json",
- "syn 1.0.29",
+ "syn 1.0.30",
  "tempfile",
  "toml",
 ]
@@ -503,7 +515,7 @@ name = "convert"
 version = "0.1.0"
 dependencies = [
  "pathfinder_export",
- "pathfinder_svg 0.5.0",
+ "pathfinder_svg",
  "usvg",
 ]
 
@@ -897,7 +909,7 @@ checksum = "7bad48618fdb549078c333a7a8528acb57af271d0433bdecd523eb620628364e"
 [[package]]
 name = "font"
 version = "0.1.0"
-source = "git+https://github.com/pdf-rs/font/#9dc3a900f94524a65346e11a2e9e4db31d9ba857"
+source = "git+https://github.com/pdf-rs/font/#675c4a94cc5637fe49cf2fb78b20ff8b37e4f02f"
 dependencies = [
  "brotli-decompressor",
  "decorum",
@@ -912,11 +924,9 @@ dependencies = [
  "pathfinder_content",
  "pathfinder_geometry",
  "pathfinder_renderer",
- "pathfinder_svg 0.5.0 (git+https://github.com/s3bk/pathfinder/)",
  "rand",
  "slotmap",
  "tuple",
- "usvg",
  "walkdir",
 ]
 
@@ -1256,9 +1266,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "1.3.2"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "076f042c5b7b98f31d205f1249267e12a6518c1481e9dae9764af19b707d2292"
+checksum = "c398b2b113b55809ceb9ee3e753fcbac793f1956663f3c36549c1346015c2afe"
 dependencies = [
  "autocfg",
 ]
@@ -1319,15 +1329,6 @@ name = "itertools"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f56a2d0bc861f9165be4eb3442afd3c236d8a98afd426f65d92324ae1091a484"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "284f18f85651fe11e8a991b2adb42cb078325c996ed026d994719efcfca1d54b"
 dependencies = [
  "either",
 ]
@@ -1425,9 +1426,9 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kurbo"
-version = "0.5.11"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf50e17a1697110c694d47c5b1a6b64faf5eb3ffe5a286df23fb8cd516e33be6"
+checksum = "2520c9c9010461ec2b4573599bca458272319a314fd0b9476cacfcb9b6e5adc8"
 dependencies = [
  "arrayvec 0.5.1",
 ]
@@ -1483,18 +1484,6 @@ name = "libc"
 version = "0.2.71"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9457b06509d27052635f90d6466700c65095fdf75409b3fbdd903e988b886f49"
-
-[[package]]
-name = "libflate"
-version = "0.1.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9135df43b1f5d0e333385cb6e7897ecd1a43d7d11b91ac003f4d2c2d2401fdd"
-dependencies = [
- "adler32",
- "crc32fast",
- "rle-decode-fast",
- "take_mut",
-]
 
 [[package]]
 name = "libloading"
@@ -1957,7 +1946,7 @@ dependencies = [
 [[package]]
 name = "pathfinder_builder"
 version = "0.1.0"
-source = "git+https://github.com/s3bk/pathfinder/#0f34f9eb98e737902104cb62cc49b1eec088ecab"
+source = "git+https://github.com/s3bk/pathfinder/#3cc8f850e3c3a130360320e884a2f6fae4e7d53d"
 dependencies = [
  "pathfinder_content",
  "pathfinder_geometry",
@@ -2048,7 +2037,7 @@ dependencies = [
  "pathfinder_renderer",
  "pathfinder_resources",
  "pathfinder_simd",
- "pathfinder_svg 0.5.0",
+ "pathfinder_svg",
  "pathfinder_ui",
  "pdf",
  "pdf_render",
@@ -2132,7 +2121,7 @@ dependencies = [
  "pathfinder_gpu",
  "pathfinder_renderer",
  "pathfinder_simd",
- "pathfinder_svg 0.5.0",
+ "pathfinder_svg",
  "pathfinder_ui",
  "rayon",
  "smallvec 1.4.0",
@@ -2165,6 +2154,7 @@ name = "pathfinder_renderer"
 version = "0.5.0"
 dependencies = [
  "bitflags",
+ "byte-slice-cast",
  "byteorder",
  "crossbeam-channel",
  "fxhash",
@@ -2199,21 +2189,6 @@ name = "pathfinder_simd"
 version = "0.5.0"
 dependencies = [
  "rustc_version",
-]
-
-[[package]]
-name = "pathfinder_svg"
-version = "0.5.0"
-source = "git+https://github.com/s3bk/pathfinder/#0f34f9eb98e737902104cb62cc49b1eec088ecab"
-dependencies = [
- "bitflags",
- "hashbrown",
- "pathfinder_color",
- "pathfinder_content",
- "pathfinder_geometry",
- "pathfinder_renderer",
- "pathfinder_simd",
- "usvg",
 ]
 
 [[package]]
@@ -2289,15 +2264,15 @@ dependencies = [
 [[package]]
 name = "pdf"
 version = "0.7.0"
-source = "git+https://github.com/pdf-rs/pdf#63eff3b4d50d7298a4776f2823ec701eafb85a60"
+source = "git+https://github.com/pdf-rs/pdf#d48dfe9a6eda210b6be6e0d88e308aa461e295a3"
 dependencies = [
  "byteorder",
  "chrono",
  "encoding",
  "glob",
+ "inflate",
  "itertools 0.6.5",
  "jpeg-decoder",
- "libflate",
  "log",
  "lzw",
  "md5",
@@ -2312,20 +2287,20 @@ dependencies = [
 [[package]]
 name = "pdf_derive"
 version = "0.1.19"
-source = "git+https://github.com/pdf-rs/pdf#63eff3b4d50d7298a4776f2823ec701eafb85a60"
+source = "git+https://github.com/pdf-rs/pdf#d48dfe9a6eda210b6be6e0d88e308aa461e295a3"
 dependencies = [
  "quote 1.0.6",
- "syn 1.0.29",
+ "syn 1.0.30",
 ]
 
 [[package]]
 name = "pdf_render"
 version = "0.1.0"
-source = "git+https://github.com/pdf-rs/pdf#63eff3b4d50d7298a4776f2823ec701eafb85a60"
+source = "git+https://github.com/pdf-rs/pdf#d48dfe9a6eda210b6be6e0d88e308aa461e295a3"
 dependencies = [
  "encoding",
  "font",
- "itertools 0.9.0",
+ "itertools 0.6.5",
  "log",
  "pathfinder_builder 0.1.0 (git+https://github.com/s3bk/pathfinder/)",
  "pathfinder_color",
@@ -2349,9 +2324,9 @@ checksum = "05da548ad6865900e60eaba7f589cc0783590a92e940c26953ff81ddbab2d677"
 
 [[package]]
 name = "png"
-version = "0.16.3"
+version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c68a431ed29933a4eb5709aca9800989758c97759345860fa5db3cfced0b65d"
+checksum = "12faa637ed9ae3d3c881332e54b5ae2dba81cda9fc4bbce0faa1ba53abcead50"
 dependencies = [
  "bitflags",
  "crc32fast",
@@ -2386,9 +2361,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.17"
+version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1502d12e458c49a4c9cbff560d0fe0060c252bc29799ed94ca2ed4bb665a0101"
+checksum = "beae6331a816b1f65d04c45b078fd8e6c93e8071771f41b8163255bbd8d7c8fa"
 dependencies = [
  "unicode-xid 0.2.0",
 ]
@@ -2426,7 +2401,7 @@ version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54a21852a652ad6f610c9510194f398ff6f8692e334fd1145fed931f7fbe44ea"
 dependencies = [
- "proc-macro2 1.0.17",
+ "proc-macro2 1.0.18",
 ]
 
 [[package]]
@@ -2554,16 +2529,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rle-decode-fast"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
-
-[[package]]
 name = "roxmltree"
-version = "0.9.1"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99d696b20b92d3e02e08fd8456f0ab03007c99e6b111a6205b9cb6fc044d0957"
+checksum = "d5001f134077069d87f77c8b9452b690df2445f7a43f1c7ca4a1af8dd505789d"
 dependencies = [
  "xmlparser",
 ]
@@ -2574,7 +2543,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2bc8af4bda8e1ff4932523b94d3dd20ee30a87232323eda55903ffd71d2fb017"
 dependencies = [
- "base64",
+ "base64 0.11.0",
  "blake2b_simd",
  "constant_time_eq",
  "crossbeam-utils",
@@ -2617,9 +2586,9 @@ dependencies = [
 
 [[package]]
 name = "ryu"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed3d612bc64430efeb3f7ee6ef26d590dce0c43249217bddc62112540c7941e1"
+checksum = "71d301d4193d031abdd79ff7e3dd721168a9572ef3fe51a1517aba235bd8f86e"
 
 [[package]]
 name = "same-file"
@@ -2694,9 +2663,9 @@ version = "1.0.111"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f2c3ac8e6ca1e9c80b8be1023940162bf81ae3cffbb1809474152f2ce1eb250"
 dependencies = [
- "proc-macro2 1.0.17",
+ "proc-macro2 1.0.18",
  "quote 1.0.6",
- "syn 1.0.29",
+ "syn 1.0.30",
 ]
 
 [[package]]
@@ -2994,20 +2963,14 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "1.0.29"
+version = "1.0.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb37da98a55b1d08529362d9cbb863be17556873df2585904ab9d2bc951291d0"
+checksum = "93a56fabc59dce20fe48b6c832cc249c713e7ed88fa28b0ee0a3bfcaae5fe4e2"
 dependencies = [
- "proc-macro2 1.0.17",
+ "proc-macro2 1.0.18",
  "quote 1.0.6",
  "unicode-xid 0.2.0",
 ]
-
-[[package]]
-name = "take_mut"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f764005d11ee5f36500a149ace24e00e3da98b0158b3e2d53a7495660d3f4d60"
 
 [[package]]
 name = "tempfile"
@@ -3088,9 +3051,9 @@ dependencies = [
 
 [[package]]
 name = "ttf-parser"
-version = "0.3.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a67a691cd15aae8f55fcc6e68efec96ec9e6e3ad967ac16f18681e2268c92037"
+checksum = "52fbe7769f5af5d7d25aea74b9443b64e544a5ffb4d2b2968295ddea934f1a06"
 
 [[package]]
 name = "tuple"
@@ -3160,11 +3123,11 @@ dependencies = [
 
 [[package]]
 name = "usvg"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4725473a52c4ebc949d3141d39c97b5131a575a96bea4912ccd5b03a720d7a1b"
+checksum = "5d98fe4bbd8cfe811fb84dabebd670d26b1e633ecb4d3a4ef3a4b8c10252448d"
 dependencies = [
- "base64",
+ "base64 0.12.1",
  "data-url",
  "flate2",
  "harfbuzz_rs",
@@ -3237,9 +3200,9 @@ dependencies = [
  "bumpalo",
  "lazy_static",
  "log",
- "proc-macro2 1.0.17",
+ "proc-macro2 1.0.18",
  "quote 1.0.6",
- "syn 1.0.29",
+ "syn 1.0.30",
  "wasm-bindgen-shared",
 ]
 
@@ -3259,9 +3222,9 @@ version = "0.2.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3156052d8ec77142051a533cdd686cba889537b213f948cd1d20869926e68e92"
 dependencies = [
- "proc-macro2 1.0.17",
+ "proc-macro2 1.0.18",
  "quote 1.0.6",
- "syn 1.0.29",
+ "syn 1.0.30",
  "wasm-bindgen-backend",
  "wasm-bindgen-shared",
 ]

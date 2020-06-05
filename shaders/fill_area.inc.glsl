@@ -1,4 +1,4 @@
-// pathfinder/shaders/fill.inc.glsl
+// pathfinder/shaders/fill_area.inc.glsl
 //
 // Copyright © 2020 The Pathfinder Project Developers.
 //

@@ -18,7 +18,7 @@ precision highp float;
 precision highp sampler2D;
 #endif
 
-#include "fill.inc.glsl"
+#include "fill_area.inc.glsl"
 
 uniform sampler2D uAreaLUT;
 
