@@ -909,6 +909,7 @@ checksum = "7bad48618fdb549078c333a7a8528acb57af271d0433bdecd523eb620628364e"
 [[package]]
 name = "font"
 version = "0.1.0"
+source = "git+https://github.com/pdf-rs/font/#307cdba5792e2c6a916c93c4826b677f8210f896"
 dependencies = [
  "brotli-decompressor",
  "decorum",
@@ -1328,6 +1329,15 @@ name = "itertools"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f56a2d0bc861f9165be4eb3442afd3c236d8a98afd426f65d92324ae1091a484"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "284f18f85651fe11e8a991b2adb42cb078325c996ed026d994719efcfca1d54b"
 dependencies = [
  "either",
 ]
@@ -1945,7 +1955,7 @@ dependencies = [
 [[package]]
 name = "pathfinder_builder"
 version = "0.1.0"
-source = "git+https://github.com/s3bk/pathfinder/#3cc8f850e3c3a130360320e884a2f6fae4e7d53d"
+source = "git+https://github.com/s3bk/pathfinder/#66f0a470e6f7f8c627bc73445f73a6e6d204e272"
 dependencies = [
  "pathfinder_content",
  "pathfinder_geometry",
@@ -2263,6 +2273,7 @@ dependencies = [
 [[package]]
 name = "pdf"
 version = "0.7.0"
+source = "git+https://github.com/pdf-rs/pdf#7a88532accb791feae5700256942a83ce41f1952"
 dependencies = [
  "byteorder",
  "chrono",
@@ -2285,6 +2296,7 @@ dependencies = [
 [[package]]
 name = "pdf_derive"
 version = "0.1.19"
+source = "git+https://github.com/pdf-rs/pdf#7a88532accb791feae5700256942a83ce41f1952"
 dependencies = [
  "quote 1.0.6",
  "syn 1.0.30",
@@ -2293,10 +2305,11 @@ dependencies = [
 [[package]]
 name = "pdf_render"
 version = "0.1.0"
+source = "git+https://github.com/pdf-rs/pdf#7a88532accb791feae5700256942a83ce41f1952"
 dependencies = [
  "encoding",
  "font",
- "itertools 0.6.5",
+ "itertools 0.9.0",
  "log",
  "pathfinder_builder 0.1.0 (git+https://github.com/s3bk/pathfinder/)",
  "pathfinder_color",
