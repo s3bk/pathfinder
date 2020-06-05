@@ -33,6 +33,9 @@ fn main() {
     #[cfg(feature="gl3_shaders")]
     add_dir(&mut file, &resources, Path::new("shaders/gl3"));
 
+    #[cfg(feature="gl4_shaders")]
+    add_dir(&mut file, &resources, Path::new("shaders/gl4"));
+
     #[cfg(feature="metal_shaders")]
     add_dir(&mut file, &resources, Path::new("shaders/metal"));
 

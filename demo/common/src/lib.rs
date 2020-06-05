@@ -98,7 +98,6 @@ pub struct DemoApp<W> where W: Window {
     content: Content,
     scene_metadata: SceneMetadata,
     render_transform: Option<RenderTransform>,
-    //render_command_stream: Option<RenderCommandStream>,
 
     camera: Camera,
     frame_counter: u32,
@@ -143,10 +142,12 @@ impl<W> DemoApp<W> where W: Window {
         let executor = DemoExecutor::new(options.jobs);
 
         let mut ui_model = DemoUIModel::new(&options);
-        let render_options = RendererOptions {
-            background_color: None,
-            level: options.renderer_level,
+
+        let level = match options.renderer_level {
+            Some(level) => level,
+            None => RendererLevel::default_for_device(&device),
         };
+        let render_options = RendererOptions { background_color: None, level };
 
         let filter = build_filter(&ui_model);
 
@@ -166,9 +167,7 @@ impl<W> DemoApp<W> where W: Window {
                                                                   viewport.size());
         let camera = Camera::new(options.mode, scene_metadata.view_box, viewport.size());
 
-        let scene_proxy = SceneProxy::from_scene(scene,
-                                                 options.renderer_level,
-                                                 executor);
+        let scene_proxy = SceneProxy::from_scene(scene, level, executor);
 
         let ground_program = GroundProgram::new(&renderer.device, resources);
         let ground_vertex_array = GroundVertexArray::new(&renderer.device,
@@ -196,7 +195,6 @@ impl<W> DemoApp<W> where W: Window {
             content,
             scene_metadata,
             render_transform: None,
-            //render_command_stream: None,
 
             camera,
             frame_counter: 0,
@@ -633,7 +631,7 @@ pub struct Options {
     pub ui: UIVisibility,
     pub background_color: BackgroundColor,
     pub high_performance_gpu: bool,
-    pub renderer_level: RendererLevel,
+    pub renderer_level: Option<RendererLevel>,
     hidden_field_for_future_proofing: (),
 }
 
@@ -646,7 +644,7 @@ impl Default for Options {
             ui: UIVisibility::All,
             background_color: BackgroundColor::Light,
             high_performance_gpu: false,
-            renderer_level: RendererLevel::D3D11,
+            renderer_level: None,
             hidden_field_for_future_proofing: (),
         }
     }
@@ -703,9 +701,8 @@ impl Options {
                 Arg::with_name("level")
                     .long("level")
                     .short("l")
-                    .help("Set the renderer Direct3D API level")
+                    .help("Set the renderer feature level as a Direct3D version equivalent")
                     .possible_values(&["9", "11"])
-                    .default_value("11")
             )
             .arg(
                 Arg::with_name("INPUT")
@@ -744,17 +741,17 @@ impl Options {
             self.high_performance_gpu = true;
         }
 
-        let renderer_level = matches.value_of("level")
-                                    .expect("Where's the renderer level option?");
-        if renderer_level == "11" {
-            self.renderer_level = RendererLevel::D3D11;
-        } else if renderer_level == "9" {
-            self.renderer_level = RendererLevel::D3D9;
+        if let Some(renderer_level) = matches.value_of("level") {
+            if renderer_level == "11" {
+                self.renderer_level = Some(RendererLevel::D3D11);
+            } else if renderer_level == "9" {
+                self.renderer_level = Some(RendererLevel::D3D9);
+            }
         }
 
         if let Some(path) = matches.value_of("INPUT") {
             self.input_path = DataPath::Path(PathBuf::from(path));
-        };
+        }
     }
 }
 

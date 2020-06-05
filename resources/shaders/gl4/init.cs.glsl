@@ -43,8 +43,8 @@ layout(std430, binding = 1)buffer bTiles {
     restrict uvec4 iTiles[];
 };
 
-layout(std430, binding = 2)buffer bFillTileMap {
-    restrict int iFillTileMap[];
+layout(std430, binding = 2)buffer bTileLinkMap {
+    restrict int iTileLinkMap[];
 };
 
 void main(){
@@ -83,6 +83,6 @@ void main(){
                               pathIndex,
                               pathInfo . w);
 
-    iFillTileMap[tileIndex]= - 1;
+    iTileLinkMap[tileIndex]= - 1;
 }
 

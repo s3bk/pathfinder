@@ -80,8 +80,8 @@ void emitMicroline(vec4 microline, uint pathIndex) {
         return;
 
     ivec4 microlineSubpixels = ivec4(round(clamp(microline, -32768.0, 32767.0) * 256.0));
-    ivec4 microlinePixels = microlineSubpixels / 256;
-    ivec4 microlineFractPixels = microlineSubpixels % 256;
+    ivec4 microlinePixels = ivec4(floor(vec4(microlineSubpixels) / 256.0));
+    ivec4 microlineFractPixels = microlineSubpixels - microlinePixels * 256;
 
     iMicrolines[outputMicrolineIndex] =
         uvec4((uint(microlinePixels.x) & 0xffff) | (uint(microlinePixels.y) << 16),

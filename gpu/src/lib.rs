@@ -42,6 +42,8 @@ pub trait Device: Sized {
     type VertexArray;
     type VertexAttr;
 
+    fn backend_name(&self) -> &'static str;
+    fn device_name(&self) -> String;
     fn feature_level(&self) -> FeatureLevel;
     fn create_texture(&self, format: TextureFormat, size: Vector2I) -> Self::Texture;
     fn create_texture_from_data(&self, format: TextureFormat, size: Vector2I, data: TextureDataRef)

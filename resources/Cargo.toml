@@ -10,6 +10,7 @@ homepage = "https://github.com/servo/pathfinder"
 
 [features]
 gl3_shaders = []
+gl4_shaders = []
 metal_shaders = []
 fonts = []
 debug-fonts = []
@@ -17,7 +18,7 @@ svg = []
 textures_lut = []
 textures_demo = []
 textures_debug = []
-default = ["gl3_shaders", "metal_shaders", "fonts", "debug-fonts", "svg", "textures_lut", "textures_debug"]
+default = ["gl3_shaders", "gl4_shaders", "metal_shaders", "fonts", "debug-fonts", "svg", "textures_lut", "textures_debug"]
 demo = ["textures_demo"]
 
 [dependencies.pathfinder_log]

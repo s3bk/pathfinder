@@ -223,9 +223,11 @@ impl<D> Renderer<D> where D: Device {
         let window_size = dest_framebuffer.window_size(&device);
 
         let timer_query_cache = TimerQueryCache::new();
-
         #[cfg(feature="debug_ui")]
-        let debug_ui_presenter = DebugUIPresenter::new(&device, resources, window_size);
+        let debug_ui_presenter = DebugUIPresenter::new(&device,
+                                                       resources,
+                                                       window_size,
+                                                       options.level);
 
         let front_frame = Frame::new(&device,
                                      &blit_program,
@@ -648,14 +650,14 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn allocate_fill_tile_map(&mut self, tile_count: u32) -> StorageID {
-        self.back_frame.storage_allocators.fill_tile_map.allocate_buffer(&self.device,
+        self.back_frame.storage_allocators.tile_link_map.allocate_buffer(&self.device,
                                                                          tile_count as u64,
                                                                          BufferTarget::Storage)
     }
 
     fn initialize_tiles(&mut self,
                         tile_storage_id: StorageID,
-                        fill_tile_map_storage_id: StorageID,
+                        tile_link_map_storage_id: StorageID,
                         tile_count: u32,
                         tile_path_info: &[TilePathInfo]) {
         let init_program = &self.d3d11_programs
@@ -684,11 +686,11 @@ impl<D> Renderer<D> where D: Device {
                                 .get(tile_storage_id)
                                 .vertex_buffer;
 
-        // Allocate fill tile map.
-        let fill_tile_map_buffer = &self.back_frame
+        // Allocate tile link map.
+        let tile_link_map_buffer = &self.back_frame
                                         .storage_allocators
-                                        .fill_tile_map
-                                        .get(fill_tile_map_storage_id);
+                                        .tile_link_map
+                                        .get(tile_link_map_storage_id);
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
@@ -705,16 +707,13 @@ impl<D> Renderer<D> where D: Device {
             storage_buffers: &[
                 (&init_program.tiles_storage_buffer, tiles_buffer),
                 (&init_program.tile_path_info_storage_buffer, &tile_path_info_buffer.buffer),
-                (&init_program.fill_tile_map_storage_buffer, &fill_tile_map_buffer.buffer),
+                (&init_program.tile_link_map_storage_buffer, &tile_link_map_buffer.buffer),
             ],
         });
 
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().other_times.push(TimerFuture::new(timer_query));
         self.stats.drawcall_count += 1;
-
-        self.device.end_commands();
-        self.device.begin_commands();
     }
 
     fn upload_propagate_metadata(&mut self,
@@ -744,17 +743,22 @@ impl<D> Renderer<D> where D: Device {
                                        .allocate_buffer(device,
                                                         backdrops.len() as u64,
                                                         BufferTarget::Storage);
+
+        PropagateMetadataStorageIDs {
+             propagate_metadata: propagate_metadata_storage_id,
+             backdrops: backdrops_storage_id,
+        }
+    }
+
+    fn upload_initial_backdrops(&self,
+                                backdrops_storage_id: StorageID,
+                                backdrops: &[BackdropInfo]) {
         let backdrops_buffer = &self.back_frame
                                     .storage_allocators
                                     .backdrops
                                     .get(backdrops_storage_id)
                                     .buffer;
         self.device.upload_to_buffer(&backdrops_buffer, 0, backdrops, BufferTarget::Storage);
-
-        PropagateMetadataStorageIDs {
-             propagate_metadata: propagate_metadata_storage_id,
-             backdrops: backdrops_storage_id,
-        }
     }
 
     fn ensure_index_buffer(&mut self, mut length: usize) {
@@ -850,7 +854,6 @@ impl<D> Renderer<D> where D: Device {
             uniforms: &[
                 (&dice_compute_program.transform_uniform, UniformData::Mat2(transform.matrix.0)),
                 (&dice_compute_program.translation_uniform, UniformData::Vec2(transform.vector.0)),
-                 // FIXME(pcwalton): This is wrong!
                 (&dice_compute_program.path_count_uniform,
                  UniformData::Int(dice_metadata.len() as i32)),
                 (&dice_compute_program.last_batch_segment_index_uniform,
@@ -874,9 +877,6 @@ impl<D> Renderer<D> where D: Device {
         self.current_timer.as_mut().unwrap().dice_times.push(TimerFuture::new(timer_query));
         self.stats.drawcall_count += 1;
 
-        self.device.end_commands();
-        self.device.begin_commands();
-
         let indirect_compute_params_receiver =
             self.device.read_buffer(&dice_metadata_storage.indirect_draw_params_buffer,
                                     BufferTarget::Storage,
@@ -898,7 +898,7 @@ impl<D> Renderer<D> where D: Device {
                                 microlines_storage: &MicrolinesStorage,
                                 propagate_metadata_storage_ids: &PropagateMetadataStorageIDs,
                                 tile_storage_id: StorageID,
-                                fill_tile_map_storage_id: StorageID,
+                                tile_link_map_storage_id: StorageID,
                                 tile_count: u32)
                                 -> Option<FillComputeStorageInfo> {
         let bin_compute_program = &self.d3d11_programs
@@ -974,14 +974,14 @@ impl<D> Renderer<D> where D: Device {
             (&bin_compute_program.backdrops_storage_buffer, backdrops_storage_buffer),
         ];
 
-        let fill_map_buffer = &self.back_frame
-                                   .storage_allocators
-                                   .fill_tile_map
-                                   .get(fill_tile_map_storage_id)
-                                   .buffer;
+        let tile_link_map_buffer = &self.back_frame
+                                        .storage_allocators
+                                        .tile_link_map
+                                        .get(tile_link_map_storage_id)
+                                        .buffer;
 
-        storage_buffers.push((&bin_compute_program.fill_tile_map_storage_buffer,
-                              &fill_map_buffer));
+        storage_buffers.push((&bin_compute_program.tile_link_map_storage_buffer,
+                              &tile_link_map_buffer));
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
@@ -1009,9 +1009,6 @@ impl<D> Renderer<D> where D: Device {
         self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
         self.stats.drawcall_count += 1;
 
-        self.device.end_commands();
-        self.device.begin_commands();
-
         let indirect_draw_params_receiver = self.device.read_buffer(&indirect_draw_params_buffer,
                                                                     BufferTarget::Storage,
                                                                     0..32);
@@ -1032,7 +1029,7 @@ impl<D> Renderer<D> where D: Device {
 
         Some(FillComputeStorageInfo {
             fill_storage_id,
-            fill_tile_map_storage_id,
+            tile_link_map_storage_id,
             // FIXME(pcwalton): Don't process all tiles!
             first_fill_tile: 0,
             fill_tile_count: tile_count,
@@ -1181,7 +1178,7 @@ impl<D> Renderer<D> where D: Device {
                               tile_storage_id: StorageID) {
         let FillComputeStorageInfo {
             fill_storage_id,
-            fill_tile_map_storage_id,
+            tile_link_map_storage_id,
             first_fill_tile,
             fill_tile_count,
         } = fill_storage_info;
@@ -1196,11 +1193,11 @@ impl<D> Renderer<D> where D: Device {
                                       .fill_vertex
                                       .get(fill_storage_id);
 
-        let fill_map_buffer = &self.back_frame
-                                   .storage_allocators
-                                   .fill_tile_map
-                                   .get(fill_tile_map_storage_id)
-                                   .buffer;
+        let tile_link_map_buffer = &self.back_frame
+                                        .storage_allocators
+                                        .tile_link_map
+                                        .get(tile_link_map_storage_id)
+                                        .buffer;
 
         let mask_framebuffer = self.back_frame
                                    .mask_framebuffer
@@ -1218,7 +1215,6 @@ impl<D> Renderer<D> where D: Device {
                                 .vertex_buffer;
 
         // This setup is an annoying workaround for the 64K limit of compute invocation in OpenGL.
-        // TODO(pcwalton): Indirect compute dispatch!
         let dimensions = ComputeDimensions {
             x: fill_tile_count.min(1 << 15),
             y: (fill_tile_count + (1 << 15) - 1) >> 15,
@@ -1236,7 +1232,7 @@ impl<D> Renderer<D> where D: Device {
             ],
             storage_buffers: &[
                 (&fill_compute_program.fills_storage_buffer, &fill_vertex_storage.vertex_buffer),
-                (&fill_compute_program.fill_tile_map_storage_buffer, fill_map_buffer),
+                (&fill_compute_program.tile_link_map_storage_buffer, tile_link_map_buffer),
                 (&fill_compute_program.tiles_storage_buffer, &tiles_buffer),
             ],
         });
@@ -1392,6 +1388,9 @@ impl<D> Renderer<D> where D: Device {
                                           fill_tile_map_storage_id,
                                           batch.tile_count,
                                           &gpu_info.tile_path_info);
+
+                    self.upload_initial_backdrops(propagate_metadata_storage_ids.backdrops,
+                                                  &gpu_info.backdrops);
 
                     fill_storage_info =
                         self.bin_segments_via_compute(&microlines_storage,
@@ -2540,7 +2539,7 @@ struct FillRasterStorageInfo {
 #[derive(Clone)]
 struct FillComputeStorageInfo {
     fill_storage_id: StorageID,
-    fill_tile_map_storage_id: StorageID,
+    tile_link_map_storage_id: StorageID,
     fill_tile_count: u32,
     first_fill_tile: u32,
 }

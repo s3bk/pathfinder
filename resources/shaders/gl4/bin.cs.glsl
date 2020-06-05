@@ -63,8 +63,8 @@ layout(std430, binding = 4)buffer bTiles {
     restrict uint iTiles[];
 };
 
-layout(std430, binding = 5)buffer bFillTileMap {
-    restrict uint iFillTileMap[];
+layout(std430, binding = 5)buffer bTileLinkMap {
+    restrict uint iTileLinkMap[];
 };
 
 layout(std430, binding = 6)buffer bBackdrops {
@@ -105,15 +105,14 @@ void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTi
         return;
 
 
-    if(atomicCompSwap(iTiles[tileIndex * 4 + 1], uint(- 1), 0u)== uint(- 1)){
+    if(int(atomicAnd(iTiles[tileIndex * 4 + 1], 0x7fffffffu))< 0)
         atomicExchange(iTiles[tileIndex * 4 + 1], atomicAdd(iIndirectDrawParams[4], 1));
-    }
 
 
     uint fillIndex = atomicAdd(iIndirectDrawParams[1], 1);
 
 
-    uint fillLink = atomicExchange(iFillTileMap[tileIndex], fillIndex);
+    uint fillLink = atomicExchange(iTileLinkMap[tileIndex], fillIndex);
 
 
     if(fillIndex < uMaxFillCount){

@@ -27,9 +27,10 @@ use pathfinder_gpu::{VertexAttrClass, VertexAttrDescriptor, VertexAttrType};
 use pathfinder_resources::ResourceLoader;
 use pathfinder_simd::default::F32x4;
 use std::cell::RefCell;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::mem;
 use std::ops::Range;
+use std::os::raw::c_char;
 use std::ptr;
 use std::rc::Rc;
 use std::str;
@@ -334,6 +335,19 @@ impl Device for GLDevice {
     type Uniform = GLUniform;
     type VertexArray = GLVertexArray;
     type VertexAttr = GLVertexAttr;
+
+    #[inline]
+    fn backend_name(&self) -> &'static str {
+        "OpenGL"
+    }
+
+    #[inline]
+    fn device_name(&self) -> String {
+        unsafe {
+            CStr::from_ptr(gl::GetString(gl::RENDERER) as *const c_char).to_string_lossy()
+                                                                        .to_string()
+        }
+    }
 
     fn feature_level(&self) -> FeatureLevel {
         match self.version {
@@ -1142,8 +1156,8 @@ impl GLDevice {
         unsafe {
             gl::BindBuffer(gl_target, receiver.object.gl_buffer); ck();
             gl::GetBufferSubData(gl_target,
-                                 (receiver.range.start as GLintptr) * 4,
-                                 ((receiver.range.end - receiver.range.start) * 4) as GLsizeiptr,
+                                 receiver.range.start as GLintptr,
+                                 (receiver.range.end - receiver.range.start) as GLsizeiptr,
                                  dest.as_mut_ptr() as *mut GLvoid); ck();
         }
         dest

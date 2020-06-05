@@ -501,7 +501,7 @@ pub struct FillComputeProgram<D> where D: Device {
     pub area_lut_texture: D::TextureParameter,
     pub tile_range_uniform: D::Uniform,
     pub fills_storage_buffer: D::StorageBuffer,
-    pub fill_tile_map_storage_buffer: D::StorageBuffer,
+    pub tile_link_map_storage_buffer: D::StorageBuffer,
     pub tiles_storage_buffer: D::StorageBuffer,
 }
 
@@ -515,7 +515,7 @@ impl<D> FillComputeProgram<D> where D: Device {
         let area_lut_texture = device.get_texture_parameter(&program, "AreaLUT");
         let tile_range_uniform = device.get_uniform(&program, "TileRange");
         let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 0);
-        let fill_tile_map_storage_buffer = device.get_storage_buffer(&program, "FillTileMap", 1);
+        let tile_link_map_storage_buffer = device.get_storage_buffer(&program, "TileLinkMap", 1);
         let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 2);
 
         FillComputeProgram {
@@ -524,7 +524,7 @@ impl<D> FillComputeProgram<D> where D: Device {
             area_lut_texture,
             tile_range_uniform,
             fills_storage_buffer,
-            fill_tile_map_storage_buffer,
+            tile_link_map_storage_buffer,
             tiles_storage_buffer,
         }
     }
@@ -833,7 +833,7 @@ pub struct BinComputeProgram<D> where D: Device {
     pub fills_storage_buffer: D::StorageBuffer,
     pub tiles_storage_buffer: D::StorageBuffer,
     pub microlines_storage_buffer: D::StorageBuffer,
-    pub fill_tile_map_storage_buffer: D::StorageBuffer,
+    pub tile_link_map_storage_buffer: D::StorageBuffer,
     pub backdrops_storage_buffer: D::StorageBuffer,
 }
 
@@ -852,7 +852,7 @@ impl<D> BinComputeProgram<D> where D: Device {
             device.get_storage_buffer(&program, "IndirectDrawParams", 2);
         let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 3);
         let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 4);
-        let fill_tile_map_storage_buffer = device.get_storage_buffer(&program, "FillTileMap", 5);
+        let tile_link_map_storage_buffer = device.get_storage_buffer(&program, "TileLinkMap", 5);
         let backdrops_storage_buffer = device.get_storage_buffer(&program, "Backdrops", 6);
 
         BinComputeProgram {
@@ -864,7 +864,7 @@ impl<D> BinComputeProgram<D> where D: Device {
             fills_storage_buffer,
             tiles_storage_buffer,
             microlines_storage_buffer,
-            fill_tile_map_storage_buffer,
+            tile_link_map_storage_buffer,
             backdrops_storage_buffer,
         }
     }
@@ -926,7 +926,7 @@ pub struct InitProgram<D> where D: Device {
     pub tile_count_uniform: D::Uniform,
     pub tile_path_info_storage_buffer: D::StorageBuffer,
     pub tiles_storage_buffer: D::StorageBuffer,
-    pub fill_tile_map_storage_buffer: D::StorageBuffer,
+    pub tile_link_map_storage_buffer: D::StorageBuffer,
 }
 
 impl<D> InitProgram<D> where D: Device {
@@ -940,7 +940,7 @@ impl<D> InitProgram<D> where D: Device {
 
         let tile_path_info_storage_buffer = device.get_storage_buffer(&program, "TilePathInfo", 0);
         let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 1);
-        let fill_tile_map_storage_buffer = device.get_storage_buffer(&program, "FillTileMap", 2);
+        let tile_link_map_storage_buffer = device.get_storage_buffer(&program, "TileLinkMap", 2);
 
         InitProgram {
             program,
@@ -948,7 +948,7 @@ impl<D> InitProgram<D> where D: Device {
             tile_count_uniform,
             tile_path_info_storage_buffer,
             tiles_storage_buffer,
-            fill_tile_map_storage_buffer,
+            tile_link_map_storage_buffer,
         }
     }
 }

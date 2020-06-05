@@ -91,7 +91,7 @@ impl<W> DemoApp<W> where W: Window {
         };
         self.renderer.set_options(RendererOptions {
             background_color: clear_color,
-            level: self.options.renderer_level,
+            level: self.renderer.level(),
         });
 
         scene_count

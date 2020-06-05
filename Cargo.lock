@@ -909,7 +909,6 @@ checksum = "7bad48618fdb549078c333a7a8528acb57af271d0433bdecd523eb620628364e"
 [[package]]
 name = "font"
 version = "0.1.0"
-source = "git+https://github.com/pdf-rs/font/#675c4a94cc5637fe49cf2fb78b20ff8b37e4f02f"
 dependencies = [
  "brotli-decompressor",
  "decorum",
@@ -2264,7 +2263,6 @@ dependencies = [
 [[package]]
 name = "pdf"
 version = "0.7.0"
-source = "git+https://github.com/pdf-rs/pdf#d48dfe9a6eda210b6be6e0d88e308aa461e295a3"
 dependencies = [
  "byteorder",
  "chrono",
@@ -2287,7 +2285,6 @@ dependencies = [
 [[package]]
 name = "pdf_derive"
 version = "0.1.19"
-source = "git+https://github.com/pdf-rs/pdf#d48dfe9a6eda210b6be6e0d88e308aa461e295a3"
 dependencies = [
  "quote 1.0.6",
  "syn 1.0.30",
@@ -2296,7 +2293,6 @@ dependencies = [
 [[package]]
 name = "pdf_render"
 version = "0.1.0"
-source = "git+https://github.com/pdf-rs/pdf#d48dfe9a6eda210b6be6e0d88e308aa461e295a3"
 dependencies = [
  "encoding",
  "font",

@@ -14,14 +14,14 @@ struct bTiles
     uint4 iTiles[1];
 };
 
-struct bFillTileMap
+struct bTileLinkMap
 {
-    int iFillTileMap[1];
+    int iTileLinkMap[1];
 };
 
 constant uint3 gl_WorkGroupSize [[maybe_unused]] = uint3(64u, 1u, 1u);
 
-kernel void main0(constant int& uTileCount [[buffer(0)]], constant int& uPathCount [[buffer(1)]], const device bTilePathInfo& _64 [[buffer(2)]], device bTiles& _148 [[buffer(3)]], device bFillTileMap& _170 [[buffer(4)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
+kernel void main0(constant int& uTileCount [[buffer(0)]], constant int& uPathCount [[buffer(1)]], const device bTilePathInfo& _64 [[buffer(2)]], device bTiles& _148 [[buffer(3)]], device bTileLinkMap& _170 [[buffer(4)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
 {
     uint tileIndex = gl_GlobalInvocationID.x;
     if (tileIndex >= uint(uTileCount))
@@ -75,6 +75,6 @@ kernel void main0(constant int& uTileCount [[buffer(0)]], constant int& uPathCou
     uint tileWidth = uint(tileRect.z - tileRect.x);
     int2 tileCoords = tileRect.xy + int2(int(tileOffset % tileWidth), int(tileOffset / tileWidth));
     _148.iTiles[tileIndex] = uint4((uint(tileCoords.x) & 65535u) | (uint(tileCoords.y) << uint(16)), 4294967295u, pathIndex, pathInfo.w);
-    _170.iFillTileMap[tileIndex] = -1;
+    _170.iTileLinkMap[tileIndex] = -1;
 }
 

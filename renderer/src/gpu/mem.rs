@@ -28,7 +28,7 @@ const TEXTURE_CACHE_SIZE: usize = 8;
 const MIN_PATH_INFO_STORAGE_CLASS:               usize = 10;    // 1024 entries
 const MIN_DICE_METADATA_STORAGE_CLASS:           usize = 10;    // 1024 entries
 const MIN_FILL_STORAGE_CLASS:                    usize = 14;    // 16K entries, 128kB
-const MIN_FILL_TILE_MAP_STORAGE_CLASS:           usize = 15;    // 32K entries, 128kB
+const MIN_TILE_LINK_MAP_STORAGE_CLASS:           usize = 15;    // 32K entries, 128kB
 const MIN_TILE_STORAGE_CLASS:                    usize = 10;    // 1024 entries, 12kB
 const MIN_TILE_PROPAGATE_METADATA_STORAGE_CLASS: usize = 8;     // 256 entries
 const MIN_CLIP_VERTEX_STORAGE_CLASS:             usize = 10;    // 1024 entries, 16kB
@@ -39,7 +39,7 @@ pub(crate) struct StorageAllocators<D> where D: Device {
     pub(crate) path_info: StorageAllocator<StorageBuffer<D, TilePathInfo>>,
     pub(crate) dice_metadata: StorageAllocator<DiceMetadataStorage<D>>,
     pub(crate) fill_vertex: StorageAllocator<FillVertexStorage<D>>,
-    pub(crate) fill_tile_map: StorageAllocator<StorageBuffer<D, i32>>,
+    pub(crate) tile_link_map: StorageAllocator<StorageBuffer<D, TileLink>>,
     pub(crate) tile_vertex: StorageAllocator<TileVertexStorage<D>>,
     pub(crate) tile_propagate_metadata: StorageAllocator<StorageBuffer<D, PropagateMetadata>>,
     pub(crate) clip_vertex: StorageAllocator<ClipVertexStorage<D>>,
@@ -77,7 +77,7 @@ impl<D> StorageAllocators<D> where D: Device {
         let path_info = StorageAllocator::new(MIN_PATH_INFO_STORAGE_CLASS);
         let dice_metadata = StorageAllocator::new(MIN_DICE_METADATA_STORAGE_CLASS);
         let fill_vertex = StorageAllocator::new(MIN_FILL_STORAGE_CLASS);
-        let fill_tile_map = StorageAllocator::new(MIN_FILL_TILE_MAP_STORAGE_CLASS);
+        let tile_link_map = StorageAllocator::new(MIN_TILE_LINK_MAP_STORAGE_CLASS);
         let tile_vertex = StorageAllocator::new(MIN_TILE_STORAGE_CLASS);
         let tile_propagate_metadata =
             StorageAllocator::new(MIN_TILE_PROPAGATE_METADATA_STORAGE_CLASS);
@@ -90,7 +90,7 @@ impl<D> StorageAllocators<D> where D: Device {
             path_info,
             dice_metadata,
             fill_vertex,
-            fill_tile_map,
+            tile_link_map,
             tile_vertex,
             tile_propagate_metadata,
             clip_vertex,
@@ -104,7 +104,7 @@ impl<D> StorageAllocators<D> where D: Device {
         self.path_info.end_frame();
         self.dice_metadata.end_frame();
         self.fill_vertex.end_frame();
-        self.fill_tile_map.end_frame();
+        self.tile_link_map.end_frame();
         self.tile_vertex.end_frame();
         self.tile_propagate_metadata.end_frame();
         self.clip_vertex.end_frame();
@@ -117,7 +117,7 @@ impl<D> StorageAllocators<D> where D: Device {
         self.path_info.gpu_bytes_allocated() +
             self.dice_metadata.gpu_bytes_allocated() +
             self.fill_vertex.gpu_bytes_allocated() +
-            self.fill_tile_map.gpu_bytes_allocated() +
+            self.tile_link_map.gpu_bytes_allocated() +
             self.tile_vertex.gpu_bytes_allocated() +
             self.tile_propagate_metadata.gpu_bytes_allocated() +
             self.clip_vertex.gpu_bytes_allocated() +
@@ -131,7 +131,7 @@ impl<D> StorageAllocators<D> where D: Device {
         println!("path_info {}", self.path_info.gpu_bytes_allocated());
         println!("dice_metadata {}", self.dice_metadata.gpu_bytes_allocated());
         println!("fill_vertex {}", self.fill_vertex.gpu_bytes_allocated());
-        println!("fill_tile_map {}", self.fill_tile_map.gpu_bytes_allocated());
+        println!("tile_link_map {}", self.tile_link_map.gpu_bytes_allocated());
         println!("tile_vertex {}", self.tile_vertex.gpu_bytes_allocated());
         println!("tile_propagate_metadata {}", self.tile_propagate_metadata.gpu_bytes_allocated());
         println!("clip_vertex {}", self.clip_vertex.gpu_bytes_allocated());
@@ -289,6 +289,12 @@ pub(crate) struct ClipVertexStorage<D> where D: Device {
     pub(crate) tile_clip_combine_vertex_array: ClipTileCombineVertexArray<D>,
     pub(crate) vertex_buffer: D::Buffer,
     pub(crate) size: u64,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub(crate) struct TileLink {
+    first_fill: i32,
 }
 
 impl<D> DiceMetadataStorage<D> where D: Device {

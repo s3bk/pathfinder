@@ -317,6 +317,16 @@ impl Device for MetalDevice {
     type VertexAttr = VertexAttribute;
 
     #[inline]
+    fn backend_name(&self) -> &'static str {
+        "Metal"
+    }
+
+    #[inline]
+    fn device_name(&self) -> String {
+        self.device.name().to_owned()
+    }
+
+    #[inline]
     fn feature_level(&self) -> FeatureLevel {
         FeatureLevel::D3D11
     }
@@ -665,6 +675,10 @@ impl Device for MetalDevice {
         });
 
         self.synchronize_texture(&texture_data_receiver.0.texture, block.copy());
+
+        self.end_commands();
+        self.begin_commands();
+
         texture_data_receiver
     }
 
@@ -684,6 +698,10 @@ impl Device for MetalDevice {
         let block = ConcreteBlock::new(move |_| buffer_data_receiver_for_block.download());
 
         self.synchronize_buffer(buffer, block.copy());
+
+        self.end_commands();
+        self.begin_commands();
+
         buffer_data_receiver
     }
 
@@ -692,7 +710,6 @@ impl Device for MetalDevice {
     }
 
     fn recv_buffer(&self, buffer_data_receiver: &MetalBufferDataReceiver) -> Vec<u8> {
-        // TODO(pcwalton): Expose this async interface!
         let mut guard = buffer_data_receiver.0.mutex.lock().unwrap();
 
         loop {

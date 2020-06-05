@@ -75,13 +75,13 @@ struct bInputIndices
 constant uint3 gl_WorkGroupSize [[maybe_unused]] = uint3(64u, 1u, 1u);
 
 static inline __attribute__((always_inline))
-float2 getPoint(thread const uint& pointIndex, thread float2x2 uTransform, const device bPoints& v_256, thread float2 uTranslation)
+float2 getPoint(thread const uint& pointIndex, thread float2x2 uTransform, const device bPoints& v_261, thread float2 uTranslation)
 {
-    return (uTransform * v_256.iPoints[pointIndex]) + uTranslation;
+    return (uTransform * v_261.iPoints[pointIndex]) + uTranslation;
 }
 
 static inline __attribute__((always_inline))
-void emitMicroline(thread const float4& microline, thread const uint& pathIndex, device bComputeIndirectParams& v_42, thread int uMaxMicrolineCount, device bMicrolines& v_94)
+void emitMicroline(thread const float4& microline, thread const uint& pathIndex, device bComputeIndirectParams& v_42, thread int uMaxMicrolineCount, device bMicrolines& v_99)
 {
     uint _50 = atomic_fetch_add_explicit((device atomic_uint*)&v_42.iComputeIndirectParams[3], 1u, memory_order_relaxed);
     uint outputMicrolineIndex = _50;
@@ -94,9 +94,9 @@ void emitMicroline(thread const float4& microline, thread const uint& pathIndex,
         return;
     }
     int4 microlineSubpixels = int4(round(fast::clamp(microline, float4(-32768.0), float4(32767.0)) * 256.0));
-    int4 microlinePixels = microlineSubpixels / int4(256);
-    int4 microlineFractPixels = microlineSubpixels % int4(256);
-    v_94.iMicrolines[outputMicrolineIndex] = uint4((uint(microlinePixels.x) & 65535u) | (uint(microlinePixels.y) << uint(16)), (uint(microlinePixels.z) & 65535u) | (uint(microlinePixels.w) << uint(16)), ((uint(microlineFractPixels.x) | (uint(microlineFractPixels.y) << uint(8))) | (uint(microlineFractPixels.z) << uint(16))) | (uint(microlineFractPixels.w) << uint(24)), pathIndex);
+    int4 microlinePixels = int4(floor(float4(microlineSubpixels) / float4(256.0)));
+    int4 microlineFractPixels = microlineSubpixels - (microlinePixels * int4(256));
+    v_99.iMicrolines[outputMicrolineIndex] = uint4((uint(microlinePixels.x) & 65535u) | (uint(microlinePixels.y) << uint(16)), (uint(microlinePixels.z) & 65535u) | (uint(microlinePixels.w) << uint(16)), ((uint(microlineFractPixels.x) | (uint(microlineFractPixels.y) << uint(8))) | (uint(microlineFractPixels.z) << uint(16))) | (uint(microlineFractPixels.w) << uint(24)), pathIndex);
 }
 
 static inline __attribute__((always_inline))
@@ -127,7 +127,7 @@ void subdivideCurve(thread const float4& baseline, thread const float4& ctrl, th
     nextCtrl = float4(p1p2p3, p2p3);
 }
 
-kernel void main0(constant int& uMaxMicrolineCount [[buffer(1)]], constant int& uLastBatchSegmentIndex [[buffer(6)]], constant int& uPathCount [[buffer(7)]], constant float2x2& uTransform [[buffer(3)]], constant float2& uTranslation [[buffer(5)]], device bComputeIndirectParams& v_42 [[buffer(0)]], device bMicrolines& v_94 [[buffer(2)]], const device bPoints& v_256 [[buffer(4)]], const device bDiceMetadata& _315 [[buffer(8)]], const device bInputIndices& _361 [[buffer(9)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
+kernel void main0(constant int& uMaxMicrolineCount [[buffer(1)]], constant int& uLastBatchSegmentIndex [[buffer(6)]], constant int& uPathCount [[buffer(7)]], constant float2x2& uTransform [[buffer(3)]], constant float2& uTranslation [[buffer(5)]], device bComputeIndirectParams& v_42 [[buffer(0)]], device bMicrolines& v_99 [[buffer(2)]], const device bPoints& v_261 [[buffer(4)]], const device bDiceMetadata& _320 [[buffer(8)]], const device bInputIndices& _366 [[buffer(9)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
 {
     uint batchSegmentIndex = gl_GlobalInvocationID.x;
     if (batchSegmentIndex >= uint(uLastBatchSegmentIndex))
@@ -139,20 +139,20 @@ kernel void main0(constant int& uMaxMicrolineCount [[buffer(1)]], constant int& 
     int iteration = 0;
     for (;;)
     {
-        bool _296 = iteration < 1024;
-        bool _303;
-        if (_296)
+        bool _301 = iteration < 1024;
+        bool _308;
+        if (_301)
         {
-            _303 = (lowPathIndex + 1u) < highPathIndex;
+            _308 = (lowPathIndex + 1u) < highPathIndex;
         }
         else
         {
-            _303 = _296;
+            _308 = _301;
         }
-        if (_303)
+        if (_308)
         {
             uint midPathIndex = lowPathIndex + ((highPathIndex - lowPathIndex) / 2u);
-            uint midBatchSegmentIndex = _315.iDiceMetadata[midPathIndex].z;
+            uint midBatchSegmentIndex = _320.iDiceMetadata[midPathIndex].z;
             if (batchSegmentIndex < midBatchSegmentIndex)
             {
                 highPathIndex = midPathIndex;
@@ -174,11 +174,11 @@ kernel void main0(constant int& uMaxMicrolineCount [[buffer(1)]], constant int& 
         }
     }
     uint batchPathIndex = lowPathIndex;
-    uint4 diceMetadata = _315.iDiceMetadata[batchPathIndex];
+    uint4 diceMetadata = _320.iDiceMetadata[batchPathIndex];
     uint firstGlobalSegmentIndexInPath = diceMetadata.y;
     uint firstBatchSegmentIndexInPath = diceMetadata.z;
     uint globalSegmentIndex = (batchSegmentIndex - firstBatchSegmentIndexInPath) + firstGlobalSegmentIndexInPath;
-    uint2 inputIndices = _361.iInputIndices[globalSegmentIndex];
+    uint2 inputIndices = _366.iInputIndices[globalSegmentIndex];
     uint fromPointIndex = inputIndices.x;
     uint flagsPathIndex = inputIndices.y;
     uint toPointIndex = fromPointIndex;
@@ -199,16 +199,16 @@ kernel void main0(constant int& uMaxMicrolineCount [[buffer(1)]], constant int& 
     }
     uint param = fromPointIndex;
     uint param_1 = toPointIndex;
-    float4 baseline = float4(getPoint(param, uTransform, v_256, uTranslation), getPoint(param_1, uTransform, v_256, uTranslation));
+    float4 baseline = float4(getPoint(param, uTransform, v_261, uTranslation), getPoint(param_1, uTransform, v_261, uTranslation));
     if ((flagsPathIndex & 3221225472u) == 0u)
     {
         float4 param_2 = baseline;
         uint param_3 = batchPathIndex;
-        emitMicroline(param_2, param_3, v_42, uMaxMicrolineCount, v_94);
+        emitMicroline(param_2, param_3, v_42, uMaxMicrolineCount, v_99);
         return;
     }
     uint param_4 = fromPointIndex + 1u;
-    float2 ctrl0 = getPoint(param_4, uTransform, v_256, uTranslation);
+    float2 ctrl0 = getPoint(param_4, uTransform, v_261, uTranslation);
     float4 ctrl;
     if ((flagsPathIndex & 2147483648u) != 0u)
     {
@@ -218,7 +218,7 @@ kernel void main0(constant int& uMaxMicrolineCount [[buffer(1)]], constant int& 
     else
     {
         uint param_5 = fromPointIndex + 2u;
-        ctrl = float4(ctrl0, getPoint(param_5, uTransform, v_256, uTranslation));
+        ctrl = float4(ctrl0, getPoint(param_5, uTransform, v_261, uTranslation));
     }
     int curveStackSize = 1;
     spvUnsafeArray<float4, 32> baselines;
@@ -236,21 +236,21 @@ kernel void main0(constant int& uMaxMicrolineCount [[buffer(1)]], constant int& 
         ctrl = ctrls[curveStackSize];
         float4 param_6 = baseline;
         float4 param_7 = ctrl;
-        bool _481 = curveIsFlat(param_6, param_7);
-        bool _490;
-        if (!_481)
+        bool _486 = curveIsFlat(param_6, param_7);
+        bool _495;
+        if (!_486)
         {
-            _490 = (curveStackSize + 2) >= 32;
+            _495 = (curveStackSize + 2) >= 32;
         }
         else
         {
-            _490 = _481;
+            _495 = _486;
         }
-        if (_490)
+        if (_495)
         {
             float4 param_8 = baseline;
             uint param_9 = batchPathIndex;
-            emitMicroline(param_8, param_9, v_42, uMaxMicrolineCount, v_94);
+            emitMicroline(param_8, param_9, v_42, uMaxMicrolineCount, v_99);
         }
         else
         {
