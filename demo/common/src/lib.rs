@@ -701,6 +701,7 @@ impl Options {
                 Arg::with_name("level")
                     .long("level")
                     .short("l")
+                    .takes_value(true)
                     .help("Set the renderer feature level as a Direct3D version equivalent")
                     .possible_values(&["9", "11"])
             )
