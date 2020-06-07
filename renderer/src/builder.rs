@@ -189,7 +189,7 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
                  scene_id: ref last_scene_id,
                  scene_epoch: ref last_scene_epoch,
                  ..
-            })) => *last_scene_id == self.scene.id() && *last_scene_epoch == self.scene.epoch(),
+            })) => *last_scene_id != self.scene.id() || *last_scene_epoch != self.scene.epoch(),
             _ => false,
         };
 
