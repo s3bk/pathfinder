@@ -8,11 +8,6 @@
 
 using namespace metal;
 
-struct bTiles
-{
-    uint iTiles[1];
-};
-
 struct bIndirectDrawParams
 {
     uint iIndirectDrawParams[1];
@@ -31,6 +26,11 @@ struct bFills
 struct bBackdrops
 {
     uint iBackdrops[1];
+};
+
+struct bTiles
+{
+    uint iTiles[1];
 };
 
 struct bMicrolines
@@ -79,7 +79,7 @@ bool computeTileIndex(thread const int2& tileCoords, thread const int4& pathTile
 }
 
 static inline __attribute__((always_inline))
-void addFill(thread const float4& lineSegment, thread const int2& tileCoords, thread const int4& pathTileRect, thread const uint& pathTileOffset, device bTiles& v_154, device bIndirectDrawParams& v_175, device bTileLinkMap& v_188, thread int uMaxFillCount, device bFills& v_209)
+void addFill(thread const float4& lineSegment, thread const int2& tileCoords, thread const int4& pathTileRect, thread const uint& pathTileOffset, device bIndirectDrawParams& v_155, device bTileLinkMap& v_165, thread int uMaxFillCount, device bFills& v_186)
 {
     int2 param = tileCoords;
     int4 param_1 = pathTileRect;
@@ -96,46 +96,40 @@ void addFill(thread const float4& lineSegment, thread const int2& tileCoords, th
     {
         return;
     }
-    uint _163 = atomic_fetch_and_explicit((device atomic_uint*)&v_154.iTiles[(tileIndex * 4u) + 1u], 2147483647u, memory_order_relaxed);
-    if (int(_163) < 0)
-    {
-        uint _178 = atomic_fetch_add_explicit((device atomic_uint*)&v_175.iIndirectDrawParams[4], 1u, memory_order_relaxed);
-        uint _179 = atomic_exchange_explicit((device atomic_uint*)&v_154.iTiles[(tileIndex * 4u) + 1u], _178, memory_order_relaxed);
-    }
-    uint _183 = atomic_fetch_add_explicit((device atomic_uint*)&v_175.iIndirectDrawParams[1], 1u, memory_order_relaxed);
-    uint fillIndex = _183;
-    int _196 = atomic_exchange_explicit((device atomic_int*)&v_188.iTileLinkMap[(tileIndex * 2u) + 0u], int(fillIndex), memory_order_relaxed);
-    uint fillLink = uint(_196);
+    uint _160 = atomic_fetch_add_explicit((device atomic_uint*)&v_155.iIndirectDrawParams[1], 1u, memory_order_relaxed);
+    uint fillIndex = _160;
+    int _173 = atomic_exchange_explicit((device atomic_int*)&v_165.iTileLinkMap[(tileIndex * 2u) + 0u], int(fillIndex), memory_order_relaxed);
+    uint fillLink = uint(_173);
     if (fillIndex < uint(uMaxFillCount))
     {
-        v_209.iFills[(fillIndex * 3u) + 0u] = scaledLocalLine.x | (scaledLocalLine.y << uint(16));
-        v_209.iFills[(fillIndex * 3u) + 1u] = scaledLocalLine.z | (scaledLocalLine.w << uint(16));
-        v_209.iFills[(fillIndex * 3u) + 2u] = fillLink;
+        v_186.iFills[(fillIndex * 3u) + 0u] = scaledLocalLine.x | (scaledLocalLine.y << uint(16));
+        v_186.iFills[(fillIndex * 3u) + 1u] = scaledLocalLine.z | (scaledLocalLine.w << uint(16));
+        v_186.iFills[(fillIndex * 3u) + 2u] = fillLink;
     }
 }
 
 static inline __attribute__((always_inline))
-void adjustBackdrop(thread const int& backdropDelta, thread const int2& tileCoords, thread const int4& pathTileRect, thread const uint& pathTileOffset, thread const uint& pathBackdropOffset, device bTiles& v_154, device bBackdrops& v_274)
+void adjustBackdrop(thread const int& backdropDelta, thread const int2& tileCoords, thread const int4& pathTileRect, thread const uint& pathTileOffset, thread const uint& pathBackdropOffset, device bBackdrops& v_251, device bTiles& v_270)
 {
     int2 param = tileCoords;
     int4 param_1 = pathTileRect;
     bool4 outcodes = computeTileOutcodes(param, param_1);
     if (any(outcodes))
     {
-        bool _253 = (!outcodes.x) && outcodes.y;
-        bool _259;
-        if (_253)
+        bool _230 = (!outcodes.x) && outcodes.y;
+        bool _236;
+        if (_230)
         {
-            _259 = !outcodes.z;
+            _236 = !outcodes.z;
         }
         else
         {
-            _259 = _253;
+            _236 = _230;
         }
-        if (_259)
+        if (_236)
         {
             uint backdropIndex = pathBackdropOffset + uint(tileCoords.x - pathTileRect.x);
-            uint _280 = atomic_fetch_add_explicit((device atomic_uint*)&v_274.iBackdrops[backdropIndex * 3u], uint(backdropDelta), memory_order_relaxed);
+            uint _257 = atomic_fetch_add_explicit((device atomic_uint*)&v_251.iBackdrops[backdropIndex * 3u], uint(backdropDelta), memory_order_relaxed);
         }
     }
     else
@@ -144,25 +138,25 @@ void adjustBackdrop(thread const int& backdropDelta, thread const int2& tileCoor
         int4 param_3 = pathTileRect;
         uint param_4 = pathTileOffset;
         uint tileIndex = computeTileIndexNoCheck(param_2, param_3, param_4);
-        uint _298 = atomic_fetch_add_explicit((device atomic_uint*)&v_154.iTiles[(tileIndex * 4u) + 3u], uint(backdropDelta << 24), memory_order_relaxed);
+        uint _280 = atomic_fetch_add_explicit((device atomic_uint*)&v_270.iTiles[(tileIndex * 4u) + 3u], uint(backdropDelta << 24), memory_order_relaxed);
     }
 }
 
-kernel void main0(constant int& uMaxFillCount [[buffer(3)]], constant int& uMicrolineCount [[buffer(6)]], device bTiles& v_154 [[buffer(0)]], device bIndirectDrawParams& v_175 [[buffer(1)]], device bTileLinkMap& v_188 [[buffer(2)]], device bFills& v_209 [[buffer(4)]], device bBackdrops& v_274 [[buffer(5)]], const device bMicrolines& _369 [[buffer(7)]], const device bMetadata& _383 [[buffer(8)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
+kernel void main0(constant int& uMaxFillCount [[buffer(2)]], constant int& uMicrolineCount [[buffer(6)]], device bIndirectDrawParams& v_155 [[buffer(0)]], device bTileLinkMap& v_165 [[buffer(1)]], device bFills& v_186 [[buffer(3)]], device bBackdrops& v_251 [[buffer(4)]], device bTiles& v_270 [[buffer(5)]], const device bMicrolines& _351 [[buffer(7)]], const device bMetadata& _365 [[buffer(8)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
 {
     uint segmentIndex = gl_GlobalInvocationID.x;
     if (segmentIndex >= uint(uMicrolineCount))
     {
         return;
     }
-    uint4 param = _369.iMicrolines[segmentIndex];
+    uint4 param = _351.iMicrolines[segmentIndex];
     uint param_1;
-    float4 _377 = unpackMicroline(param, param_1);
+    float4 _359 = unpackMicroline(param, param_1);
     uint pathIndex = param_1;
-    float4 lineSegment = _377;
-    int4 pathTileRect = _383.iMetadata[(pathIndex * 3u) + 0u];
-    uint pathTileOffset = uint(_383.iMetadata[(pathIndex * 3u) + 1u].x);
-    uint pathBackdropOffset = uint(_383.iMetadata[(pathIndex * 3u) + 2u].x);
+    float4 lineSegment = _359;
+    int4 pathTileRect = _365.iMetadata[(pathIndex * 3u) + 0u];
+    uint pathTileOffset = uint(_365.iMetadata[(pathIndex * 3u) + 1u].x);
+    uint pathBackdropOffset = uint(_365.iMetadata[(pathIndex * 3u) + 2u].x);
     int2 tileSize = int2(16);
     int4 tileLineSegment = int4(floor(lineSegment / float4(tileSize.xyxy)));
     int2 fromTileCoords = tileLineSegment.xy;
@@ -178,7 +172,7 @@ kernel void main0(constant int& uMaxFillCount [[buffer(3)]], constant int& uMicr
     int lastStepDirection = 0;
     uint iteration = 0u;
     int nextStepDirection;
-    float _523;
+    float _505;
     float4 auxiliarySegment;
     while (iteration < 1024u)
     {
@@ -206,13 +200,13 @@ kernel void main0(constant int& uMaxFillCount [[buffer(3)]], constant int& uMicr
         }
         if (nextStepDirection == 1)
         {
-            _523 = tMax.x;
+            _505 = tMax.x;
         }
         else
         {
-            _523 = tMax.y;
+            _505 = tMax.y;
         }
-        float nextT = fast::min(_523, 1.0);
+        float nextT = fast::min(_505, 1.0);
         if (all(tileCoords == toTileCoords))
         {
             nextStepDirection = 0;
@@ -223,7 +217,7 @@ kernel void main0(constant int& uMaxFillCount [[buffer(3)]], constant int& uMicr
         int2 param_3 = tileCoords;
         int4 param_4 = pathTileRect;
         uint param_5 = pathTileOffset;
-        addFill(param_2, param_3, param_4, param_5, v_154, v_175, v_188, uMaxFillCount, v_209);
+        addFill(param_2, param_3, param_4, param_5, v_155, v_165, uMaxFillCount, v_186);
         bool haveAuxiliarySegment = false;
         if ((tileStep.y < 0) && (nextStepDirection == 2))
         {
@@ -244,7 +238,7 @@ kernel void main0(constant int& uMaxFillCount [[buffer(3)]], constant int& uMicr
             int2 param_7 = tileCoords;
             int4 param_8 = pathTileRect;
             uint param_9 = pathTileOffset;
-            addFill(param_6, param_7, param_8, param_9, v_154, v_175, v_188, uMaxFillCount, v_209);
+            addFill(param_6, param_7, param_8, param_9, v_155, v_165, uMaxFillCount, v_186);
         }
         if ((tileStep.x < 0) && (lastStepDirection == 1))
         {
@@ -253,7 +247,7 @@ kernel void main0(constant int& uMaxFillCount [[buffer(3)]], constant int& uMicr
             int4 param_12 = pathTileRect;
             uint param_13 = pathTileOffset;
             uint param_14 = pathBackdropOffset;
-            adjustBackdrop(param_10, param_11, param_12, param_13, param_14, v_154, v_274);
+            adjustBackdrop(param_10, param_11, param_12, param_13, param_14, v_251, v_270);
         }
         else
         {
@@ -264,7 +258,7 @@ kernel void main0(constant int& uMaxFillCount [[buffer(3)]], constant int& uMicr
                 int4 param_17 = pathTileRect;
                 uint param_18 = pathTileOffset;
                 uint param_19 = pathBackdropOffset;
-                adjustBackdrop(param_15, param_16, param_17, param_18, param_19, v_154, v_274);
+                adjustBackdrop(param_15, param_16, param_17, param_18, param_19, v_251, v_270);
             }
         }
         if (nextStepDirection == 1)

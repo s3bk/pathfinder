@@ -755,6 +755,7 @@ pub struct PropagateProgram<D> where D: Device {
     pub z_buffer_storage_buffer: D::StorageBuffer,
     pub tile_link_map_storage_buffer: D::StorageBuffer,
     pub first_tile_map_storage_buffer: D::StorageBuffer,
+    pub indirect_draw_params_storage_buffer: D::StorageBuffer,
 }
 
 impl<D> PropagateProgram<D> where D: Device {
@@ -775,6 +776,8 @@ impl<D> PropagateProgram<D> where D: Device {
         let z_buffer_storage_buffer = device.get_storage_buffer(&program, "ZBuffer", 6);
         let tile_link_map_storage_buffer = device.get_storage_buffer(&program, "TileLinkMap", 7);
         let first_tile_map_storage_buffer = device.get_storage_buffer(&program, "FirstTileMap", 8);
+        let indirect_draw_params_storage_buffer =
+            device.get_storage_buffer(&program, "IndirectDrawParams", 9);
 
         PropagateProgram {
             program,
@@ -789,6 +792,7 @@ impl<D> PropagateProgram<D> where D: Device {
             z_buffer_storage_buffer,
             tile_link_map_storage_buffer,
             first_tile_map_storage_buffer,
+            indirect_draw_params_storage_buffer,
         }
     }
 }

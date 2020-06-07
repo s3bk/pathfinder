@@ -1025,9 +1025,6 @@ impl<D> Renderer<D> where D: Device {
             return None;
         }
 
-        self.back_frame.max_alpha_tile_index =
-            indirect_draw_params[FILL_INDIRECT_DRAW_PARAMS_ALPHA_TILE_COUNT_INDEX];
-
         self.stats.fill_count += needed_fill_count as usize;
 
         Some(FillComputeStorageInfo {
@@ -1177,9 +1174,9 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn draw_fills_via_compute(&mut self,
-                              fill_storage_info: FillComputeStorageInfo,
+                              fill_storage_info: &FillComputeStorageInfo,
                               tile_storage_id: StorageID) {
-        let FillComputeStorageInfo {
+        let &FillComputeStorageInfo {
             fill_storage_id,
             tile_link_map_storage_id,
             first_fill_tile,
@@ -1413,17 +1410,18 @@ impl<D> Renderer<D> where D: Device {
                 let fill_storage_info =
                     fill_storage_info.expect("Ran out of space for fills when binning!");
 
-                // FIXME(pcwalton): Don't unconditionally pass true for copying here.
-                self.reallocate_alpha_tile_pages_if_necessary(true);
-                self.draw_fills_via_compute(fill_storage_info, tile_vertex_storage_id);
-
                 self.propagate_tiles(gpu_info.backdrops.len() as u32,
                                      tile_vertex_storage_id,
+                                     fill_storage_info.fill_storage_id,
                                      z_buffer_storage_id,
                                      tile_link_map_storage_id,
                                      first_tile_map_storage_id,
                                      &propagate_metadata_storage_ids,
                                      clip_storage_ids.as_ref());
+
+                // FIXME(pcwalton): Don't unconditionally pass true for copying here.
+                self.reallocate_alpha_tile_pages_if_necessary(true);
+                self.draw_fills_via_compute(&fill_storage_info, tile_vertex_storage_id);
 
                 self.sort_tiles(tile_link_map_storage_id,
                                 first_tile_map_storage_id);
@@ -1475,6 +1473,7 @@ impl<D> Renderer<D> where D: Device {
     fn propagate_tiles(&mut self,
                        column_count: u32,
                        tile_storage_id: StorageID,
+                       fill_storage_id: StorageID,
                        z_buffer_storage_id: StorageID,
                        tile_link_map_storage_id: StorageID,
                        first_tile_map_storage_id: StorageID,
@@ -1531,6 +1530,15 @@ impl<D> Renderer<D> where D: Device {
                                                   &vec![FirstTile::default(); tile_area],
                                                   BufferTarget::Storage);
 
+        let fill_vertex_storage = self.back_frame
+                                      .storage_allocators
+                                      .fill_vertex
+                                      .get(fill_storage_id);
+        let indirect_draw_params_buffer =
+            &fill_vertex_storage.indirect_draw_params_buffer
+                                .as_ref()
+                                .expect("Where's the indirect draw params buffer?");
+
         let mut storage_buffers = vec![
             (&propagate_program.draw_metadata_storage_buffer, propagate_metadata_storage_buffer),
             (&propagate_program.backdrops_storage_buffer, &backdrops_storage_buffer),
@@ -1539,6 +1547,7 @@ impl<D> Renderer<D> where D: Device {
              z_buffer.buffer.as_ref().expect("Where's the Z-buffer?")),
             (&propagate_program.tile_link_map_storage_buffer, tile_link_map_storage_buffer),
             (&propagate_program.first_tile_map_storage_buffer, first_tile_map_storage_buffer),
+            (&propagate_program.indirect_draw_params_storage_buffer, indirect_draw_params_buffer),
         ];
 
         if let Some(clip_storage_ids) = clip_storage_ids {
@@ -1589,6 +1598,15 @@ impl<D> Renderer<D> where D: Device {
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().other_times.push(TimerFuture::new(timer_query));
         self.stats.drawcall_count += 1;
+
+        let indirect_draw_params_receiver = self.device.read_buffer(&indirect_draw_params_buffer,
+                                                                    BufferTarget::Storage,
+                                                                    0..32);
+        let indirect_draw_params = self.device.recv_buffer(&indirect_draw_params_receiver);
+        let indirect_draw_params: &[u32] = indirect_draw_params.as_slice_of().unwrap();
+
+        self.back_frame.max_alpha_tile_index =
+            indirect_draw_params[FILL_INDIRECT_DRAW_PARAMS_ALPHA_TILE_COUNT_INDEX];
     }
 
     fn sort_tiles(&mut self,

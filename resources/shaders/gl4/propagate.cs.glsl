@@ -79,6 +79,15 @@ layout(std430, binding = 8)buffer bFirstTileMap {
     restrict int iFirstTileMap[];
 };
 
+
+
+
+
+
+layout(std430, binding = 9)buffer bIndirectDrawParams {
+    restrict uint iIndirectDrawParams[];
+};
+
 uint calculateTileIndex(uint bufferOffset, uvec4 tileRect, uvec2 tileCoord){
     return bufferOffset + tileCoord . y *(tileRect . z - tileRect . x)+ tileCoord . x;
 }
@@ -110,11 +119,16 @@ void main(){
         uvec2 drawTileCoord = uvec2(tileX, tileY);
         uint drawTileIndex = calculateTileIndex(drawTileBufferOffset, drawTileRect, drawTileCoord);
 
-        int drawAlphaTileIndex = int(iDrawTiles[drawTileIndex * 4 + 1]);
         uint drawTileWord = iDrawTiles[drawTileIndex * 4 + 3];
 
         int delta = int(drawTileWord)>> 24;
         int drawTileBackdrop = currentBackdrop;
+
+
+
+        int drawAlphaTileIndex = - 1;
+        if(iTileLinkMap[drawTileIndex * 2 + 0]>= 0)
+            drawAlphaTileIndex = int(atomicAdd(iIndirectDrawParams[4], 1));
 
 
         if(clipPathIndex >= 0){

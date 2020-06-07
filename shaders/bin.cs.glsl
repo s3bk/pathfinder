@@ -104,10 +104,6 @@ void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTi
     if (scaledLocalLine.x == scaledLocalLine.z)
         return;
 
-    // Allocate an alpha tile if necessary.
-    if (int(atomicAnd(iTiles[tileIndex * 4 + 1], 0x7fffffffu)) < 0)
-        atomicExchange(iTiles[tileIndex * 4 + 1], atomicAdd(iIndirectDrawParams[4], 1));
-
     // Bump instance count.
     uint fillIndex = atomicAdd(iIndirectDrawParams[1], 1);
 
