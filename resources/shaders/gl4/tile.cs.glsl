@@ -688,9 +688,9 @@ uint calculateTileIndex(uint bufferOffset, uvec4 tileRect, uvec2 tileCoord){
 
 ivec2 toImageCoords(ivec2 coords){
 
+    return ivec2(coords . x, uFramebufferSize . y - coords . y);
 
 
-    return coords;
 
 }
 
