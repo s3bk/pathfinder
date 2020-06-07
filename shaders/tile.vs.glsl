@@ -10,11 +10,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#extension GL_GOOGLE_include_directive : enable
+
 precision highp float;
 
 #ifdef GL_ES
 precision highp sampler2D;
 #endif
+
+#include "tile_vertex.inc.glsl"
 
 uniform mat4 uTransform;
 uniform vec2 uTileSize;
@@ -52,18 +56,14 @@ void main() {
         return;
     }
 
-    vec2 textureMetadataScale = vec2(1.0) / vec2(uTextureMetadataSize);
-    vec2 metadataEntryCoord = vec2(aColor % 128 * 4, aColor / 128);
-    vec2 colorTexMatrix0Coord = (metadataEntryCoord + vec2(0.5, 0.5)) * textureMetadataScale;
-    vec2 colorTexOffsetsCoord = (metadataEntryCoord + vec2(1.5, 0.5)) * textureMetadataScale;
-    vec2 baseColorCoord = (metadataEntryCoord + vec2(2.5, 0.5)) * textureMetadataScale;
-    vec4 colorTexMatrix0 = texture(uTextureMetadata, colorTexMatrix0Coord);
-    vec4 colorTexOffsets = texture(uTextureMetadata, colorTexOffsetsCoord);
-    vec4 baseColor = texture(uTextureMetadata, baseColorCoord);
+    computeTileVaryings(position,
+                        aColor,
+                        uTextureMetadata,
+                        uTextureMetadataSize,
+                        vColorTexCoord0,
+                        vBaseColor);
 
-    vColorTexCoord0 = mat2(colorTexMatrix0) * position + colorTexOffsets.xy;
-    vMaskTexCoord0 = vec3(maskTexCoord0, float(aCtrlBackdrop.y));
-    vBaseColor = baseColor;
     vTileCtrl = float(aCtrlBackdrop.x);
+    vMaskTexCoord0 = vec3(maskTexCoord0, float(aCtrlBackdrop.y));
     gl_Position = uTransform * vec4(position, 0.0, 1.0);
 }

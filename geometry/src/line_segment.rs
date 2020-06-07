@@ -291,17 +291,6 @@ impl MulAssign<Vector2F> for LineSegment2F {
     }
 }
 
-/*
-#[derive(Clone, Copy, Debug, Default)]
-#[repr(C)]
-pub struct LineSegmentU16 {
-    pub from_x: u16,
-    pub from_y: u16,
-    pub to_x: u16,
-    pub to_y: u16,
-}
-*/
-
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct LineSegmentU16 {

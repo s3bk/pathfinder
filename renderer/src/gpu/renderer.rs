@@ -10,7 +10,7 @@
 
 #[cfg(feature="debug_ui")]
 use crate::gpu::debug::DebugUIPresenter;
-use crate::gpu::mem::{ClipVertexStorage, DiceMetadataStorage, FillVertexStorage};
+use crate::gpu::mem::{ClipVertexStorage, DiceMetadataStorage, FillVertexStorage, FirstTile};
 use crate::gpu::mem::{StorageAllocators, StorageID, TextureCache, TexturePage, TileVertexStorage};
 use crate::gpu::options::{DestFramebuffer, RendererLevel, RendererOptions};
 use crate::gpu::perf::{PendingTimer, RenderStats, RenderTime, TimerFuture, TimerQueryCache};
@@ -18,7 +18,8 @@ use crate::gpu::shaders::{BlitBufferVertexArray, BlitProgram, BlitVertexArray, C
 use crate::gpu::shaders::{ClearVertexArray, ClipTileCombineProgram, ClipTileCopyProgram};
 use crate::gpu::shaders::{CopyTileProgram, D3D11Programs, FillProgram, MAX_FILLS_PER_BATCH};
 use crate::gpu::shaders::{PROPAGATE_WORKGROUP_SIZE, ReprojectionProgram, ReprojectionVertexArray};
-use crate::gpu::shaders::{StencilProgram, StencilVertexArray, TileProgram};
+use crate::gpu::shaders::{SORT_WORKGROUP_SIZE, StencilProgram, StencilVertexArray};
+use crate::gpu::shaders::{TileProgram, TileProgramCommon};
 use crate::gpu_data::{BackdropInfo, Clip, DiceMetadata, Fill, PathSource, PrepareTilesBatch};
 use crate::gpu_data::{PrepareTilesModalInfo, PropagateMetadata, RenderCommand, SegmentIndices};
 use crate::gpu_data::{Segments, TextureLocation, TextureMetadataEntry, TexturePageDescriptor};
@@ -105,6 +106,9 @@ const BIN_INDIRECT_DRAW_PARAMS_MICROLINE_COUNT_INDEX:   usize = 3;
 
 const INITIAL_ALLOCATED_MICROLINE_COUNT: u32 = 1024 * 16;
 const INITIAL_ALLOCATED_FILL_COUNT: u32 = 1024 * 16;
+
+const LOAD_ACTION_CLEAR: i32 = 0;
+const LOAD_ACTION_LOAD:  i32 = 1;
 
 pub struct Renderer<D> where D: Device {
     // Device
@@ -194,7 +198,7 @@ impl<D> Renderer<D> where D: Device {
         let blit_program = BlitProgram::new(&device, resources);
         let clear_program = ClearProgram::new(&device, resources);
         let fill_program = FillProgram::new(&device, resources, options.level);
-        let tile_program = TileProgram::new(&device, resources);
+        let tile_program = TileProgram::new(&device, resources, options.level);
         let tile_copy_program = CopyTileProgram::new(&device, resources);
         let tile_clip_combine_program = ClipTileCombineProgram::new(&device, resources);
         let tile_clip_copy_program = ClipTileCopyProgram::new(&device, resources);
@@ -346,7 +350,8 @@ impl<D> Renderer<D> where D: Device {
                                 batch.color_texture,
                                 batch.blend_mode,
                                 batch.filter,
-                                batch_info.z_buffer_storage_id)
+                                batch_info.z_buffer_storage_id,
+                                batch_info.d3d11_info)
             }
             RenderCommand::Finish { cpu_build_time } => {
                 self.stats.cpu_build_time = cpu_build_time;
@@ -383,18 +388,24 @@ impl<D> Renderer<D> where D: Device {
     fn start_rendering(&mut self,
                        bounding_quad: BoundingQuad,
                        path_count: usize,
-                       mut needs_readable_framebuffer: bool) {
-        if let DestFramebuffer::Other(_) = self.dest_framebuffer {
-            needs_readable_framebuffer = false;
+                       needs_readable_framebuffer: bool) {
+        match (&self.dest_framebuffer, &self.tile_program) {
+            (&DestFramebuffer::Other(_), _) => {
+                self.flags.remove(RendererFlags::INTERMEDIATE_DEST_FRAMEBUFFER_NEEDED);
+            }
+            (&DestFramebuffer::Default { .. }, &TileProgram::Compute(_)) => {
+                self.flags.insert(RendererFlags::INTERMEDIATE_DEST_FRAMEBUFFER_NEEDED);
+            }
+            _ => {
+                self.flags.set(RendererFlags::INTERMEDIATE_DEST_FRAMEBUFFER_NEEDED,
+                               needs_readable_framebuffer);
+            }
         }
 
         if self.flags.contains(RendererFlags::USE_DEPTH) {
             self.draw_stencil(&bounding_quad);
         }
         self.stats.path_count = path_count;
-
-        self.flags.set(RendererFlags::INTERMEDIATE_DEST_FRAMEBUFFER_NEEDED,
-                       needs_readable_framebuffer);
 
         self.render_targets.clear();
     }
@@ -649,7 +660,7 @@ impl<D> Renderer<D> where D: Device {
         self.ensure_index_buffer(tiles.len());
     }
 
-    fn allocate_fill_tile_map(&mut self, tile_count: u32) -> StorageID {
+    fn allocate_tile_link_map(&mut self, tile_count: u32) -> StorageID {
         self.back_frame.storage_allocators.tile_link_map.allocate_buffer(&self.device,
                                                                          tile_count as u64,
                                                                          BufferTarget::Storage)
@@ -1022,9 +1033,6 @@ impl<D> Renderer<D> where D: Device {
             return None;
         }
 
-        self.back_frame.max_alpha_tile_index =
-            indirect_draw_params[FILL_INDIRECT_DRAW_PARAMS_ALPHA_TILE_COUNT_INDEX];
-
         self.stats.fill_count += needed_fill_count as usize;
 
         Some(FillComputeStorageInfo {
@@ -1174,9 +1182,9 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn draw_fills_via_compute(&mut self,
-                              fill_storage_info: FillComputeStorageInfo,
+                              fill_storage_info: &FillComputeStorageInfo,
                               tile_storage_id: StorageID) {
-        let FillComputeStorageInfo {
+        let &FillComputeStorageInfo {
             fill_storage_id,
             tile_link_map_storage_id,
             first_fill_tile,
@@ -1328,12 +1336,12 @@ impl<D> Renderer<D> where D: Device {
 
         // Upload tiles to GPU or allocate them as appropriate.
         let tile_vertex_storage_id = self.allocate_tiles(batch.tile_count);
-        let fill_tile_map_storage_id = match batch.modal {
+        let tile_link_map_storage_id = match batch.modal {
             PrepareTilesModalInfo::CPU(ref cpu_info) => {
                 self.upload_tiles(tile_vertex_storage_id, &cpu_info.tiles);
                 None
             }
-            PrepareTilesModalInfo::GPU(_) => Some(self.allocate_fill_tile_map(batch.tile_count)),
+            PrepareTilesModalInfo::GPU(_) => Some(self.allocate_tile_link_map(batch.tile_count)),
         };
 
         // Fetch and/or allocate clip storage as needed.
@@ -1343,7 +1351,9 @@ impl<D> Renderer<D> where D: Device {
                 let clip_tile_batch_info =
                     self.back_frame.tile_batch_info[clip_batch_id.0 as usize];
                 Some(ClipStorageIDs {
-                    metadata: clip_tile_batch_info.propagate_metadata_storage_id,
+                    metadata: clip_tile_batch_info.d3d11_info.as_ref().map(|d3d11_info| {
+                        d3d11_info.propagate_metadata_storage_id
+                    }),
                     tiles: clip_tile_batch_info.tile_vertex_storage_id,
                     vertices: self.allocate_clip_storage(clipped_path_info.max_clipped_tile_count),
                 })
@@ -1356,9 +1366,12 @@ impl<D> Renderer<D> where D: Device {
 
         // Propagate backdrops, bin fills, render fills, and/or perform clipping on GPU if
         // necessary.
-        let propagate_metadata_storage_id = match batch.modal {
+        let d3d11_info = match batch.modal {
             PrepareTilesModalInfo::CPU(_) => None,
             PrepareTilesModalInfo::GPU(ref gpu_info) => {
+                // Allocate space for tile lists.
+                let first_tile_map_storage_id = self.allocate_first_tile_map();
+
                 let propagate_metadata_storage_ids =
                     self.upload_propagate_metadata(&gpu_info.propagate_metadata,
                                                    &gpu_info.backdrops);
@@ -1381,11 +1394,11 @@ impl<D> Renderer<D> where D: Device {
                 // Initialize tiles, and bin segments. We might have to do this twice if our first
                 // attempt runs out of space in the fill buffer.
                 let mut fill_storage_info = None;
-                let fill_tile_map_storage_id =
-                    fill_tile_map_storage_id.expect("Where's the fill tile map?");
+                let tile_link_map_storage_id =
+                    tile_link_map_storage_id.expect("Where's the tile link map?");
                 for _ in 0..2 {
                     self.initialize_tiles(tile_vertex_storage_id,
-                                          fill_tile_map_storage_id,
+                                          tile_link_map_storage_id,
                                           batch.tile_count,
                                           &gpu_info.tile_path_info);
 
@@ -1396,7 +1409,7 @@ impl<D> Renderer<D> where D: Device {
                         self.bin_segments_via_compute(&microlines_storage,
                                                       &propagate_metadata_storage_ids,
                                                       tile_vertex_storage_id,
-                                                      fill_tile_map_storage_id,
+                                                      tile_link_map_storage_id,
                                                       batch.tile_count);
                     if fill_storage_info.is_some() {
                         break;
@@ -1405,16 +1418,28 @@ impl<D> Renderer<D> where D: Device {
                 let fill_storage_info =
                     fill_storage_info.expect("Ran out of space for fills when binning!");
 
-                // FIXME(pcwalton): Don't unconditionally pass true for copying here.
-                self.reallocate_alpha_tile_pages_if_necessary(true);
-                self.draw_fills_via_compute(fill_storage_info, tile_vertex_storage_id);
-
                 self.propagate_tiles(gpu_info.backdrops.len() as u32,
                                      tile_vertex_storage_id,
+                                     fill_storage_info.fill_storage_id,
                                      z_buffer_storage_id,
+                                     tile_link_map_storage_id,
+                                     first_tile_map_storage_id,
                                      &propagate_metadata_storage_ids,
                                      clip_storage_ids.as_ref());
-                Some(propagate_metadata_storage_ids.propagate_metadata)
+
+                // FIXME(pcwalton): Don't unconditionally pass true for copying here.
+                self.reallocate_alpha_tile_pages_if_necessary(true);
+                self.draw_fills_via_compute(&fill_storage_info, tile_vertex_storage_id);
+
+                self.sort_tiles(tile_link_map_storage_id,
+                                first_tile_map_storage_id);
+
+                Some(TileBatchInfoD3D11 {
+                    propagate_metadata_storage_id:
+                        propagate_metadata_storage_ids.propagate_metadata,
+                    tile_link_map_storage_id,
+                    first_tile_map_storage_id,
+                })
             }
         };
 
@@ -1422,8 +1447,8 @@ impl<D> Renderer<D> where D: Device {
         self.back_frame.tile_batch_info.insert(batch.batch_id.0 as usize, TileBatchInfo {
             tile_count: batch.tile_count,
             tile_vertex_storage_id,
-            propagate_metadata_storage_id,
             z_buffer_storage_id,
+            d3d11_info,
         });
 
         // Prepare or upload the Z-buffers as necessary.
@@ -1456,7 +1481,10 @@ impl<D> Renderer<D> where D: Device {
     fn propagate_tiles(&mut self,
                        column_count: u32,
                        tile_storage_id: StorageID,
+                       fill_storage_id: StorageID,
                        z_buffer_storage_id: StorageID,
+                       tile_link_map_storage_id: StorageID,
+                       first_tile_map_storage_id: StorageID,
                        propagate_metadata_storage_ids: &PropagateMetadataStorageIDs,
                        clip_storage_ids: Option<&ClipStorageIDs>) {
         let propagate_program = &self.d3d11_programs
@@ -1485,12 +1513,39 @@ impl<D> Renderer<D> where D: Device {
         let z_buffer = self.back_frame.storage_allocators.z_buffers.get(z_buffer_storage_id);
         let z_buffer_size =
             self.device.texture_size(self.device.framebuffer_texture(&z_buffer.framebuffer));
+        let tile_area = z_buffer_size.area() as usize;
         self.device.upload_to_buffer::<i32>(z_buffer.buffer
                                                     .as_ref()
                                                     .expect("Where's the Z-buffer?"),
                                             0,
-                                            &vec![0; z_buffer_size.area() as usize],
+                                            &vec![0; tile_area],
                                             BufferTarget::Storage);
+
+        let tile_link_map_storage_buffer = &self.back_frame
+                                                .storage_allocators
+                                                .tile_link_map
+                                                .get(tile_link_map_storage_id)
+                                                .buffer;
+
+        // TODO(pcwalton): Initialize the first tiles buffer on GPU?
+        let first_tile_map_storage_buffer = &self.back_frame
+                                                 .storage_allocators
+                                                 .first_tile_map
+                                                 .get(first_tile_map_storage_id)
+                                                 .buffer;
+        self.device.upload_to_buffer::<FirstTile>(&first_tile_map_storage_buffer,
+                                                  0,
+                                                  &vec![FirstTile::default(); tile_area],
+                                                  BufferTarget::Storage);
+
+        let fill_vertex_storage = self.back_frame
+                                      .storage_allocators
+                                      .fill_vertex
+                                      .get(fill_storage_id);
+        let indirect_draw_params_buffer =
+            &fill_vertex_storage.indirect_draw_params_buffer
+                                .as_ref()
+                                .expect("Where's the indirect draw params buffer?");
 
         let mut storage_buffers = vec![
             (&propagate_program.draw_metadata_storage_buffer, propagate_metadata_storage_buffer),
@@ -1498,6 +1553,9 @@ impl<D> Renderer<D> where D: Device {
             (&propagate_program.draw_tiles_storage_buffer, alpha_tile_buffer),
             (&propagate_program.z_buffer_storage_buffer,
              z_buffer.buffer.as_ref().expect("Where's the Z-buffer?")),
+            (&propagate_program.tile_link_map_storage_buffer, tile_link_map_storage_buffer),
+            (&propagate_program.first_tile_map_storage_buffer, first_tile_map_storage_buffer),
+            (&propagate_program.indirect_draw_params_storage_buffer, indirect_draw_params_buffer),
         ];
 
         if let Some(clip_storage_ids) = clip_storage_ids {
@@ -1543,6 +1601,62 @@ impl<D> Renderer<D> where D: Device {
                 (&propagate_program.column_count_uniform, UniformData::Int(column_count as i32)),
             ],
             storage_buffers: &storage_buffers,
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().other_times.push(TimerFuture::new(timer_query));
+        self.stats.drawcall_count += 1;
+
+        let indirect_draw_params_receiver = self.device.read_buffer(&indirect_draw_params_buffer,
+                                                                    BufferTarget::Storage,
+                                                                    0..32);
+        let indirect_draw_params = self.device.recv_buffer(&indirect_draw_params_receiver);
+        let indirect_draw_params: &[u32] = indirect_draw_params.as_slice_of().unwrap();
+
+        self.back_frame.max_alpha_tile_index =
+            indirect_draw_params[FILL_INDIRECT_DRAW_PARAMS_ALPHA_TILE_COUNT_INDEX];
+    }
+
+    fn sort_tiles(&mut self,
+                  tile_link_map_storage_id: StorageID,
+                  first_tile_map_storage_id: StorageID) {
+        let sort_program = &self.d3d11_programs
+                                .as_ref()
+                                .expect("Tile sorting requires D3D11 programs!")
+                                .sort_program;
+
+        let tile_link_map_buffer = &self.back_frame
+                                        .storage_allocators
+                                        .tile_link_map
+                                        .get(tile_link_map_storage_id)
+                                        .buffer;
+        let first_tile_map_buffer = &self.back_frame
+                                         .storage_allocators
+                                         .first_tile_map
+                                         .get(first_tile_map_storage_id)
+                                         .buffer;
+
+        let tile_count = self.framebuffer_tile_size().area();
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        let dimensions = ComputeDimensions {
+            x: (tile_count as u32 + SORT_WORKGROUP_SIZE - 1) / SORT_WORKGROUP_SIZE,
+            y: 1,
+            z: 1,
+        };
+        self.device.dispatch_compute(dimensions, &ComputeState {
+            program: &sort_program.program,
+            textures: &[],
+            images: &[],
+            uniforms: &[
+                (&sort_program.tile_count_uniform, UniformData::Int(tile_count)),
+            ],
+            storage_buffers: &[
+                (&sort_program.tile_link_map_storage_buffer, &tile_link_map_buffer),
+                (&sort_program.first_tile_map_storage_buffer, &first_tile_map_buffer),
+            ],
         });
 
         self.device.end_timer_query(&timer_query);
@@ -1599,6 +1713,16 @@ impl<D> Renderer<D> where D: Device {
                                                               self.draw_viewport().size())
     }
 
+    fn allocate_first_tile_map(&mut self) -> StorageID {
+        let framebuffer_size = self.draw_viewport().size();
+        let area = ((framebuffer_size.x() as u64 + TILE_WIDTH as u64 - 1) / TILE_WIDTH as u64) *
+                   ((framebuffer_size.y() as u64 + TILE_HEIGHT as u64 - 1) / TILE_HEIGHT as u64);
+        self.back_frame
+            .storage_allocators
+            .first_tile_map
+            .allocate_buffer(&self.device, area, BufferTarget::Storage)
+    }
+
     fn upload_z_buffer(&mut self,
                        z_buffer_storage_id: StorageID,
                        z_buffer_map: &DenseTileMap<i32>) {
@@ -1643,11 +1767,42 @@ impl<D> Renderer<D> where D: Device {
 
     fn draw_tiles(&mut self,
                   tile_count: u32,
-                  storage_id: StorageID,
+                  tile_storage_id: StorageID,
                   color_texture_0: Option<TileBatchTexture>,
                   blend_mode: BlendMode,
                   filter: Filter,
-                  z_buffer_storage_id: StorageID) {
+                  z_buffer_storage_id: StorageID,
+                  d3d11_info: Option<TileBatchInfoD3D11>) {
+        match self.tile_program {
+            TileProgram::Raster(_) => {
+                self.draw_tiles_via_raster(tile_count,
+                                           tile_storage_id,
+                                           color_texture_0,
+                                           blend_mode,
+                                           filter,
+                                           z_buffer_storage_id)
+            }
+            TileProgram::Compute(_) => {
+                let d3d11_info = d3d11_info.expect("No D3D11 info present!");
+                self.draw_tiles_via_compute(tile_count,
+                                            tile_storage_id,
+                                            d3d11_info.tile_link_map_storage_id,
+                                            d3d11_info.first_tile_map_storage_id,
+                                            color_texture_0,
+                                            blend_mode,
+                                            filter,
+                                            z_buffer_storage_id)
+            }
+        }
+    }
+
+    fn draw_tiles_via_raster(&mut self,
+                             tile_count: u32,
+                             storage_id: StorageID,
+                             color_texture_0: Option<TileBatchTexture>,
+                             blend_mode: BlendMode,
+                             filter: Filter,
+                             z_buffer_storage_id: StorageID) {
         // TODO(pcwalton): Disable blend for solid tiles.
 
         let needs_readable_framebuffer = blend_mode.needs_readable_framebuffer();
@@ -1661,101 +1816,42 @@ impl<D> Renderer<D> where D: Device {
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
-        let z_buffer = self.back_frame.storage_allocators.z_buffers.get(z_buffer_storage_id);
-        let z_buffer_texture = self.device.framebuffer_texture(&z_buffer.framebuffer);
-        let mut textures = vec![
-            (&self.tile_program.texture_metadata_texture,
-             &self.back_frame.texture_metadata_texture),
-            (&self.tile_program.z_buffer_texture, z_buffer_texture),
-        ];
-        let mut uniforms = vec![
-            (&self.tile_program.z_buffer_texture_size_uniform,
-             UniformData::IVec2(self.device.texture_size(z_buffer_texture).0)),
-            (&self.tile_program.transform_uniform,
-             UniformData::Mat4(self.tile_transform().to_columns())),
-            (&self.tile_program.tile_size_uniform,
-             UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
-            (&self.tile_program.framebuffer_size_uniform,
-             UniformData::Vec2(draw_viewport.size().to_f32().0)),
-            (&self.tile_program.texture_metadata_size_uniform,
-             UniformData::IVec2(I32x2::new(TEXTURE_METADATA_TEXTURE_WIDTH,
-                                           TEXTURE_METADATA_TEXTURE_HEIGHT))),
-        ];
+        let tile_raster_program = match self.tile_program {
+            TileProgram::Raster(ref tile_raster_program) => tile_raster_program,
+            TileProgram::Compute(_) => unreachable!(),
+        };
+
+        let (mut textures, mut uniforms) = (vec![], vec![]);
+
+        self.set_uniforms_for_drawing_tiles(&tile_raster_program.common,
+                                            &mut textures,
+                                            &mut uniforms,
+                                            color_texture_0,
+                                            blend_mode,
+                                            filter,
+                                            z_buffer_storage_id);
+
+        uniforms.push((&tile_raster_program.transform_uniform,
+                       UniformData::Mat4(self.tile_transform().to_columns())));
 
         if needs_readable_framebuffer {
-            textures.push((&self.tile_program.dest_texture,
+            textures.push((&tile_raster_program.dest_texture,
                            self.device
                                .framebuffer_texture(&self.back_frame.dest_blend_framebuffer)));
         }
-
-        if let Some(ref mask_framebuffer) = self.back_frame.mask_framebuffer {
-            let mask_texture = self.device.framebuffer_texture(mask_framebuffer);
-            uniforms.push((&self.tile_program.mask_texture_size_0_uniform,
-                           UniformData::Vec2(self.device.texture_size(mask_texture).to_f32().0)));
-            textures.push((&self.tile_program.mask_texture_0, mask_texture));
-        }
-
-        // TODO(pcwalton): Refactor.
-        let mut ctrl = 0;
-        match color_texture_0 {
-            Some(color_texture) => {
-                let color_texture_page = self.texture_page(color_texture.page);
-                let color_texture_size = self.device.texture_size(color_texture_page).to_f32();
-                self.device.set_texture_sampling_mode(color_texture_page,
-                                                      color_texture.sampling_flags);
-                textures.push((&self.tile_program.color_texture_0, color_texture_page));
-                uniforms.push((&self.tile_program.color_texture_size_0_uniform,
-                               UniformData::Vec2(color_texture_size.0)));
-
-                ctrl |= color_texture.composite_op.to_combine_mode() <<
-                    COMBINER_CTRL_COLOR_COMBINE_SHIFT;
-            }
-            None => {
-                uniforms.push((&self.tile_program.color_texture_size_0_uniform,
-                               UniformData::Vec2(F32x2::default())));
-            }
-        }
-
-        ctrl |= blend_mode.to_composite_ctrl() << COMBINER_CTRL_COMPOSITE_SHIFT;
-
-        match filter {
-            Filter::None => self.set_uniforms_for_no_filter(&mut uniforms),
-            Filter::RadialGradient { line, radii, uv_origin } => {
-                ctrl |= COMBINER_CTRL_FILTER_RADIAL_GRADIENT << COMBINER_CTRL_COLOR_FILTER_SHIFT;
-                self.set_uniforms_for_radial_gradient_filter(&mut uniforms, line, radii, uv_origin)
-            }
-            Filter::PatternFilter(PatternFilter::Text {
-                fg_color,
-                bg_color,
-                defringing_kernel,
-                gamma_correction,
-            }) => {
-                ctrl |= COMBINER_CTRL_FILTER_TEXT << COMBINER_CTRL_COLOR_FILTER_SHIFT;
-                self.set_uniforms_for_text_filter(&mut textures,
-                                                  &mut uniforms,
-                                                  fg_color,
-                                                  bg_color,
-                                                  defringing_kernel,
-                                                  gamma_correction);
-            }
-            Filter::PatternFilter(PatternFilter::Blur { direction, sigma }) => {
-                ctrl |= COMBINER_CTRL_FILTER_BLUR << COMBINER_CTRL_COLOR_FILTER_SHIFT;
-                self.set_uniforms_for_blur_filter(&mut uniforms, direction, sigma);
-            }
-        }
-
-        uniforms.push((&self.tile_program.ctrl_uniform, UniformData::Int(ctrl)));
 
         let vertex_array = &self.back_frame
                                 .storage_allocators
                                 .tile_vertex
                                 .get(storage_id)
                                 .tile_vertex_array
+                                .as_ref()
+                                .expect("No tile vertex array present!")
                                 .vertex_array;
 
         self.device.draw_elements_instanced(6, tile_count, &RenderState {
             target: &self.draw_render_target(),
-            program: &self.tile_program.program,
+            program: &tile_raster_program.common.program,
             vertex_array,
             primitive: Primitive::Triangles,
             textures: &textures,
@@ -1776,6 +1872,204 @@ impl<D> Renderer<D> where D: Device {
         self.stats.drawcall_count += 1;
 
         self.preserve_draw_framebuffer();
+    }
+
+    fn draw_tiles_via_compute(&mut self,
+                              tile_count: u32,
+                              tile_storage_id: StorageID,
+                              tile_link_map_storage_id: StorageID,
+                              first_tile_map_storage_id: StorageID,
+                              color_texture_0: Option<TileBatchTexture>,
+                              blend_mode: BlendMode,
+                              filter: Filter,
+                              z_buffer_storage_id: StorageID) {
+        // TODO(pcwalton): Disable blend for solid tiles.
+
+        let needs_readable_framebuffer = blend_mode.needs_readable_framebuffer();
+        if needs_readable_framebuffer {
+            self.copy_alpha_tiles_to_dest_blend_texture(tile_count, tile_storage_id);
+        }
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        let tile_compute_program = match self.tile_program {
+            TileProgram::Compute(ref tile_compute_program) => tile_compute_program,
+            TileProgram::Raster(_) => unreachable!(),
+        };
+
+        let (mut textures, mut uniforms, mut images) = (vec![], vec![], vec![]);
+
+        self.set_uniforms_for_drawing_tiles(&tile_compute_program.common,
+                                            &mut textures,
+                                            &mut uniforms,
+                                            color_texture_0,
+                                            blend_mode,
+                                            filter,
+                                            z_buffer_storage_id);
+
+        uniforms.push((&tile_compute_program.framebuffer_tile_size_uniform,
+                       UniformData::IVec2(self.framebuffer_tile_size().0)));
+
+        match self.draw_render_target() {
+            RenderTarget::Default => panic!("Can't draw to the default framebuffer with compute!"),
+            RenderTarget::Framebuffer(ref framebuffer) => {
+                let dest_texture = self.device.framebuffer_texture(framebuffer);
+                images.push((&tile_compute_program.dest_image,
+                             dest_texture,
+                             ImageAccess::ReadWrite));
+            }
+        }
+
+        let clear_color = self.clear_color_for_draw_operation();
+        match clear_color {
+            None => {
+                uniforms.push((&tile_compute_program.load_action_uniform,
+                               UniformData::Int(LOAD_ACTION_LOAD)));
+                uniforms.push((&tile_compute_program.clear_color_uniform,
+                               UniformData::Vec4(F32x4::default())));
+            }
+            Some(clear_color) => {
+                uniforms.push((&tile_compute_program.load_action_uniform,
+                               UniformData::Int(LOAD_ACTION_CLEAR)));
+                uniforms.push((&tile_compute_program.clear_color_uniform,
+                               UniformData::Vec4(clear_color.0)));
+            }
+        }
+
+        let tiles_buffer = &self.back_frame
+                                .storage_allocators
+                                .tile_vertex
+                                .get(tile_storage_id)
+                                .vertex_buffer;
+        let tile_link_map_storage_buffer = &self.back_frame
+                                                .storage_allocators
+                                                .tile_link_map
+                                                .get(tile_link_map_storage_id)
+                                                .buffer;
+        let first_tile_map_storage_buffer = &self.back_frame
+                                                 .storage_allocators
+                                                 .first_tile_map
+                                                 .get(first_tile_map_storage_id)
+                                                 .buffer;
+
+        let framebuffer_tile_size = self.framebuffer_tile_size().0;
+        let compute_dimensions = ComputeDimensions {
+            x: framebuffer_tile_size.x() as u32,
+            y: framebuffer_tile_size.y() as u32,
+            z: 1,
+        };
+
+        self.device.dispatch_compute(compute_dimensions, &ComputeState {
+            program: &tile_compute_program.common.program,
+            textures: &textures,
+            images: &images,
+            storage_buffers: &[
+                (&tile_compute_program.tiles_storage_buffer, tiles_buffer),
+                (&tile_compute_program.tile_link_map_storage_buffer, tile_link_map_storage_buffer),
+                (&tile_compute_program.first_tile_map_storage_buffer,
+                 first_tile_map_storage_buffer),
+            ],
+            uniforms: &uniforms,
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().raster_times.push(TimerFuture::new(timer_query));
+        self.stats.drawcall_count += 1;
+
+        self.preserve_draw_framebuffer();
+    }
+
+    fn set_uniforms_for_drawing_tiles<'a>(
+            &'a self,
+            tile_program: &'a TileProgramCommon<D>,
+            textures: &mut Vec<TextureBinding<'a, D::TextureParameter, D::Texture>>,
+            uniforms: &mut Vec<UniformBinding<'a, D::Uniform>>,
+            color_texture_0: Option<TileBatchTexture>,
+            blend_mode: BlendMode,
+            filter: Filter,
+            z_buffer_storage_id: StorageID) {
+        let draw_viewport = self.draw_viewport();
+
+        let z_buffer = self.back_frame.storage_allocators.z_buffers.get(z_buffer_storage_id);
+        let z_buffer_texture = self.device.framebuffer_texture(&z_buffer.framebuffer);
+
+        textures.push((&tile_program.texture_metadata_texture,
+                       &self.back_frame.texture_metadata_texture));
+        textures.push((&tile_program.z_buffer_texture, z_buffer_texture));
+
+        uniforms.push((&tile_program.z_buffer_texture_size_uniform,
+                       UniformData::IVec2(self.device.texture_size(z_buffer_texture).0)));
+        uniforms.push((&tile_program.tile_size_uniform,
+                       UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))));
+        uniforms.push((&tile_program.framebuffer_size_uniform,
+                       UniformData::Vec2(draw_viewport.size().to_f32().0)));
+        uniforms.push((&tile_program.texture_metadata_size_uniform,
+                       UniformData::IVec2(I32x2::new(TEXTURE_METADATA_TEXTURE_WIDTH,
+                                                     TEXTURE_METADATA_TEXTURE_HEIGHT))));
+
+        if let Some(ref mask_framebuffer) = self.back_frame.mask_framebuffer {
+            let mask_texture = self.device.framebuffer_texture(mask_framebuffer);
+            uniforms.push((&tile_program.mask_texture_size_0_uniform,
+                           UniformData::Vec2(self.device.texture_size(mask_texture).to_f32().0)));
+            textures.push((&tile_program.mask_texture_0, mask_texture));
+        }
+
+        // TODO(pcwalton): Refactor.
+        let mut ctrl = 0;
+        match color_texture_0 {
+            Some(color_texture) => {
+                let color_texture_page = self.texture_page(color_texture.page);
+                let color_texture_size = self.device.texture_size(color_texture_page).to_f32();
+                self.device.set_texture_sampling_mode(color_texture_page,
+                                                      color_texture.sampling_flags);
+                textures.push((&tile_program.color_texture_0, color_texture_page));
+                uniforms.push((&tile_program.color_texture_size_0_uniform,
+                               UniformData::Vec2(color_texture_size.0)));
+
+                ctrl |= color_texture.composite_op.to_combine_mode() <<
+                    COMBINER_CTRL_COLOR_COMBINE_SHIFT;
+            }
+            None => {
+                uniforms.push((&tile_program.color_texture_size_0_uniform,
+                               UniformData::Vec2(F32x2::default())));
+            }
+        }
+
+        ctrl |= blend_mode.to_composite_ctrl() << COMBINER_CTRL_COMPOSITE_SHIFT;
+
+        match filter {
+            Filter::None => self.set_uniforms_for_no_filter(tile_program, uniforms),
+            Filter::RadialGradient { line, radii, uv_origin } => {
+                ctrl |= COMBINER_CTRL_FILTER_RADIAL_GRADIENT << COMBINER_CTRL_COLOR_FILTER_SHIFT;
+                self.set_uniforms_for_radial_gradient_filter(tile_program,
+                                                             uniforms,
+                                                             line,
+                                                             radii,
+                                                             uv_origin)
+            }
+            Filter::PatternFilter(PatternFilter::Text {
+                fg_color,
+                bg_color,
+                defringing_kernel,
+                gamma_correction,
+            }) => {
+                ctrl |= COMBINER_CTRL_FILTER_TEXT << COMBINER_CTRL_COLOR_FILTER_SHIFT;
+                self.set_uniforms_for_text_filter(tile_program,
+                                                  textures,
+                                                  uniforms,
+                                                  fg_color,
+                                                  bg_color,
+                                                  defringing_kernel,
+                                                  gamma_correction);
+            }
+            Filter::PatternFilter(PatternFilter::Blur { direction, sigma }) => {
+                ctrl |= COMBINER_CTRL_FILTER_BLUR << COMBINER_CTRL_COLOR_FILTER_SHIFT;
+                self.set_uniforms_for_blur_filter(tile_program, uniforms, direction, sigma);
+            }
+        }
+
+        uniforms.push((&tile_program.ctrl_uniform, UniformData::Int(ctrl)));
     }
 
     fn copy_alpha_tiles_to_dest_blend_texture(&mut self, tile_count: u32, storage_id: StorageID) {
@@ -1936,46 +2230,49 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn set_uniforms_for_no_filter<'a>(&'a self,
+                                      tile_program: &'a TileProgramCommon<D>,
                                       uniforms: &mut Vec<(&'a D::Uniform, UniformData)>) {
         uniforms.extend_from_slice(&[
-            (&self.tile_program.filter_params_0_uniform, UniformData::Vec4(F32x4::default())),
-            (&self.tile_program.filter_params_1_uniform, UniformData::Vec4(F32x4::default())),
-            (&self.tile_program.filter_params_2_uniform, UniformData::Vec4(F32x4::default())),
+            (&tile_program.filter_params_0_uniform, UniformData::Vec4(F32x4::default())),
+            (&tile_program.filter_params_1_uniform, UniformData::Vec4(F32x4::default())),
+            (&tile_program.filter_params_2_uniform, UniformData::Vec4(F32x4::default())),
         ]);
     }
 
     fn set_uniforms_for_radial_gradient_filter<'a>(
             &'a self,
+            tile_program: &'a TileProgramCommon<D>,
             uniforms: &mut Vec<(&'a D::Uniform, UniformData)>,
             line: LineSegment2F,
             radii: F32x2,
             uv_origin: Vector2F) {
         uniforms.extend_from_slice(&[
-            (&self.tile_program.filter_params_0_uniform,
+            (&tile_program.filter_params_0_uniform,
              UniformData::Vec4(line.from().0.concat_xy_xy(line.vector().0))),
-            (&self.tile_program.filter_params_1_uniform,
+            (&tile_program.filter_params_1_uniform,
              UniformData::Vec4(radii.concat_xy_xy(uv_origin.0))),
-            (&self.tile_program.filter_params_2_uniform, UniformData::Vec4(F32x4::default())),
+            (&tile_program.filter_params_2_uniform, UniformData::Vec4(F32x4::default())),
         ]);
     }
 
     fn set_uniforms_for_text_filter<'a>(
             &'a self,
+            tile_program: &'a TileProgramCommon<D>,
             textures: &mut Vec<TextureBinding<'a, D::TextureParameter, D::Texture>>,
             uniforms: &mut Vec<UniformBinding<'a, D::Uniform>>,
             fg_color: ColorF,
             bg_color: ColorF,
             defringing_kernel: Option<DefringingKernel>,
             gamma_correction: bool) {
-        textures.push((&self.tile_program.gamma_lut_texture, &self.gamma_lut_texture));
+        textures.push((&tile_program.gamma_lut_texture, &self.gamma_lut_texture));
 
         match defringing_kernel {
             Some(ref kernel) => {
-                uniforms.push((&self.tile_program.filter_params_0_uniform,
+                uniforms.push((&tile_program.filter_params_0_uniform,
                                UniformData::Vec4(F32x4::from_slice(&kernel.0))));
             }
             None => {
-                uniforms.push((&self.tile_program.filter_params_0_uniform,
+                uniforms.push((&tile_program.filter_params_0_uniform,
                                UniformData::Vec4(F32x4::default())));
             }
         }
@@ -1984,12 +2281,13 @@ impl<D> Renderer<D> where D: Device {
         params_2.set_w(gamma_correction as i32 as f32);
 
         uniforms.extend_from_slice(&[
-            (&self.tile_program.filter_params_1_uniform, UniformData::Vec4(bg_color.0)),
-            (&self.tile_program.filter_params_2_uniform, UniformData::Vec4(params_2)),
+            (&tile_program.filter_params_1_uniform, UniformData::Vec4(bg_color.0)),
+            (&tile_program.filter_params_2_uniform, UniformData::Vec4(params_2)),
         ]);
     }
 
     fn set_uniforms_for_blur_filter<'a>(&'a self,
+                                        tile_program: &'a TileProgramCommon<D>,
                                         uniforms: &mut Vec<(&'a D::Uniform, UniformData)>,
                                         direction: BlurDirection,
                                         sigma: f32) {
@@ -2006,11 +2304,11 @@ impl<D> Renderer<D> where D: Device {
         let support = f32::ceil(1.5 * sigma) * 2.0;
 
         uniforms.extend_from_slice(&[
-            (&self.tile_program.filter_params_0_uniform,
+            (&tile_program.filter_params_0_uniform,
              UniformData::Vec4(src_offset.0.concat_xy_xy(F32x2::new(support, 0.0)))),
-            (&self.tile_program.filter_params_1_uniform,
+            (&tile_program.filter_params_1_uniform,
              UniformData::Vec4(F32x4::new(gauss_coeff_x, gauss_coeff_y, gauss_coeff_z, 0.0))),
-            (&self.tile_program.filter_params_2_uniform, UniformData::Vec4(F32x4::default())),
+            (&tile_program.filter_params_2_uniform, UniformData::Vec4(F32x4::default())),
         ]);
     }
 
@@ -2268,9 +2566,15 @@ impl<D> Frame<D> where D: Device {
 struct TileBatchInfo {
     tile_count: u32,
     tile_vertex_storage_id: StorageID,
-    // Only present if we're doing tile preparation on GPU.
-    propagate_metadata_storage_id: Option<StorageID>,
     z_buffer_storage_id: StorageID,
+    d3d11_info: Option<TileBatchInfoD3D11>,
+}
+
+#[derive(Clone, Copy)]
+struct TileBatchInfoD3D11 {
+    propagate_metadata_storage_id: StorageID,
+    tile_link_map_storage_id: StorageID,
+    first_tile_map_storage_id: StorageID,
 }
 
 // Render stats

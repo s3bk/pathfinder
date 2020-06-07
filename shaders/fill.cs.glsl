@@ -31,6 +31,8 @@ layout(std430, binding = 0) buffer bFills {
 };
 
 layout(std430, binding = 1) buffer bTileLinkMap {
+    // [0]: index of first fill in this tile
+    // [1]: index of next tile
     restrict readonly int iTileLinkMap[];
 };
 
@@ -47,7 +49,7 @@ void main() {
     if (tileIndex >= uTileRange.y)
         return;
 
-    int fillIndex = iTileLinkMap[tileIndex];
+    int fillIndex = iTileLinkMap[tileIndex * 2 + 0];
     if (fillIndex < 0)
         return;
 

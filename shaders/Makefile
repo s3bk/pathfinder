@@ -37,10 +37,14 @@ COMPUTE_SHADERS=\
 	fill.cs.glsl \
 	init.cs.glsl \
 	propagate.cs.glsl \
+	sort.cs.glsl \
+	tile.cs.glsl \
 	$(EMPTY)
 
 INCLUDES=\
 	fill_area.inc.glsl \
+	tile_fragment.inc.glsl \
+	tile_vertex.inc.glsl \
 	$(EMPTY)
 
 OUT=\

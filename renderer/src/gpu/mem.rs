@@ -22,6 +22,7 @@ use pathfinder_gpu::{BufferData, BufferTarget, BufferUploadMode, Device};
 use pathfinder_gpu::{TextureFormat, TextureSamplingFlags};
 use std::marker::PhantomData;
 use std::mem;
+use std::default::Default;
 
 const TEXTURE_CACHE_SIZE: usize = 8;
 
@@ -31,6 +32,7 @@ const MIN_FILL_STORAGE_CLASS:                    usize = 14;    // 16K entries, 
 const MIN_TILE_LINK_MAP_STORAGE_CLASS:           usize = 15;    // 32K entries, 128kB
 const MIN_TILE_STORAGE_CLASS:                    usize = 10;    // 1024 entries, 12kB
 const MIN_TILE_PROPAGATE_METADATA_STORAGE_CLASS: usize = 8;     // 256 entries
+const MIN_FIRST_TILE_MAP_STORAGE_CLASS:          usize = 12;    // 4096 entries
 const MIN_CLIP_VERTEX_STORAGE_CLASS:             usize = 10;    // 1024 entries, 16kB
 const MIN_BACKDROPS_STORAGE_CLASS:               usize = 12;    // 4096 entries
 const MIN_MICROLINES_STORAGE_CLASS:              usize = 14;    // 16K entries
@@ -43,6 +45,7 @@ pub(crate) struct StorageAllocators<D> where D: Device {
     pub(crate) tile_vertex: StorageAllocator<TileVertexStorage<D>>,
     pub(crate) tile_propagate_metadata: StorageAllocator<StorageBuffer<D, PropagateMetadata>>,
     pub(crate) clip_vertex: StorageAllocator<ClipVertexStorage<D>>,
+    pub(crate) first_tile_map: StorageAllocator<StorageBuffer<D, FirstTile>>,
     pub(crate) backdrops: StorageAllocator<StorageBuffer<D, BackdropInfo>>,
     pub(crate) microlines: StorageAllocator<StorageBuffer<D, Microline>>,
     pub(crate) z_buffers: ZBufferStorageAllocator<D>,
@@ -82,6 +85,7 @@ impl<D> StorageAllocators<D> where D: Device {
         let tile_propagate_metadata =
             StorageAllocator::new(MIN_TILE_PROPAGATE_METADATA_STORAGE_CLASS);
         let clip_vertex = StorageAllocator::new(MIN_CLIP_VERTEX_STORAGE_CLASS);
+        let first_tile_map = StorageAllocator::new(MIN_FIRST_TILE_MAP_STORAGE_CLASS);
         let backdrops = StorageAllocator::new(MIN_BACKDROPS_STORAGE_CLASS);
         let microlines = StorageAllocator::new(MIN_MICROLINES_STORAGE_CLASS);
         let z_buffers = ZBufferStorageAllocator::new();
@@ -94,6 +98,7 @@ impl<D> StorageAllocators<D> where D: Device {
             tile_vertex,
             tile_propagate_metadata,
             clip_vertex,
+            first_tile_map,
             backdrops,
             microlines,
             z_buffers,
@@ -108,6 +113,7 @@ impl<D> StorageAllocators<D> where D: Device {
         self.tile_vertex.end_frame();
         self.tile_propagate_metadata.end_frame();
         self.clip_vertex.end_frame();
+        self.first_tile_map.end_frame();
         self.backdrops.end_frame();
         self.microlines.end_frame();
         self.z_buffers.end_frame();
@@ -121,6 +127,7 @@ impl<D> StorageAllocators<D> where D: Device {
             self.tile_vertex.gpu_bytes_allocated() +
             self.tile_propagate_metadata.gpu_bytes_allocated() +
             self.clip_vertex.gpu_bytes_allocated() +
+            self.first_tile_map.gpu_bytes_allocated() +
             self.backdrops.gpu_bytes_allocated() +
             self.microlines.gpu_bytes_allocated() +
             self.z_buffers.gpu_bytes_allocated()
@@ -135,6 +142,7 @@ impl<D> StorageAllocators<D> where D: Device {
         println!("tile_vertex {}", self.tile_vertex.gpu_bytes_allocated());
         println!("tile_propagate_metadata {}", self.tile_propagate_metadata.gpu_bytes_allocated());
         println!("clip_vertex {}", self.clip_vertex.gpu_bytes_allocated());
+        println!("first_tile_map {}", self.first_tile_map.gpu_bytes_allocated());
         println!("backdrops {}", self.backdrops.gpu_bytes_allocated());
         println!("microlines {}", self.microlines.gpu_bytes_allocated());
         println!("z_buffers {}", self.z_buffers.gpu_bytes_allocated());
@@ -278,7 +286,7 @@ pub(crate) struct FillVertexStorage<D> where D: Device {
 }
 
 pub(crate) struct TileVertexStorage<D> where D: Device {
-    pub(crate) tile_vertex_array: TileVertexArray<D>,
+    pub(crate) tile_vertex_array: Option<TileVertexArray<D>>,
     pub(crate) tile_copy_vertex_array: CopyTileVertexArray<D>,
     pub(crate) vertex_buffer: D::Buffer,
     pub(crate) size: u64,
@@ -295,6 +303,13 @@ pub(crate) struct ClipVertexStorage<D> where D: Device {
 #[repr(C)]
 pub(crate) struct TileLink {
     first_fill: i32,
+    next_tile: i32,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub(crate) struct FirstTile {
+    first_tile: i32,
 }
 
 impl<D> DiceMetadataStorage<D> where D: Device {
@@ -377,11 +392,16 @@ impl<D> TileVertexStorage<D> where D: Device {
         device.allocate_buffer::<TileObjectPrimitive>(&vertex_buffer,
                                                       BufferData::Uninitialized(size as usize),
                                                       BufferTarget::Vertex);
-        let tile_vertex_array = TileVertexArray::new(device,
-                                                     &tile_program,
-                                                     &vertex_buffer,
-                                                     &quad_vertex_positions_buffer,
-                                                     &quad_vertex_indices_buffer);
+        let tile_vertex_array = match *tile_program {
+            TileProgram::Compute(_) => None,
+            TileProgram::Raster(ref tile_raster_program) => {
+                Some(TileVertexArray::new(device,
+                                          tile_raster_program,
+                                          &vertex_buffer,
+                                          &quad_vertex_positions_buffer,
+                                          &quad_vertex_indices_buffer))
+            }
+        };
         let tile_copy_vertex_array = CopyTileVertexArray::new(device,
                                                               &tile_copy_program,
                                                               &vertex_buffer,
@@ -512,5 +532,12 @@ impl<D> Storage for ZBuffer<D> where D: Device {
             size += self.tile_size.area() as u64 * 4;
         }
         size
+    }
+}
+
+impl Default for FirstTile {
+    #[inline]
+    fn default() -> FirstTile {
+        FirstTile { first_tile: -1 }
     }
 }

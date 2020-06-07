@@ -75,6 +75,7 @@ kernel void main0(constant int& uTileCount [[buffer(0)]], constant int& uPathCou
     uint tileWidth = uint(tileRect.z - tileRect.x);
     int2 tileCoords = tileRect.xy + int2(int(tileOffset % tileWidth), int(tileOffset / tileWidth));
     _148.iTiles[tileIndex] = uint4((uint(tileCoords.x) & 65535u) | (uint(tileCoords.y) << uint(16)), 4294967295u, pathIndex, pathInfo.w);
-    _170.iTileLinkMap[tileIndex] = -1;
+    _170.iTileLinkMap[(tileIndex * 2u) + 0u] = -1;
+    _170.iTileLinkMap[(tileIndex * 2u) + 1u] = -1;
 }
 

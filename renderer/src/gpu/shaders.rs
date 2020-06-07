@@ -22,6 +22,7 @@ const CLIP_TILE_INSTANCE_SIZE: usize = 16;
 pub const MAX_FILLS_PER_BATCH: usize = 0x10000;
 
 pub const PROPAGATE_WORKGROUP_SIZE: u32 = 64;
+pub const SORT_WORKGROUP_SIZE: u32 = 64;
 
 pub struct BlitVertexArray<D> where D: Device {
     pub vertex_array: D::VertexArray,
@@ -174,7 +175,7 @@ pub struct TileVertexArray<D> where D: Device {
 
 impl<D> TileVertexArray<D> where D: Device {
     pub fn new(device: &D,
-               tile_program: &TileProgram<D>,
+               tile_program: &TileRasterProgram<D>,
                tile_vertex_buffer: &D::Buffer,
                quad_vertex_positions_buffer: &D::Buffer,
                quad_vertex_indices_buffer: &D::Buffer)
@@ -182,15 +183,16 @@ impl<D> TileVertexArray<D> where D: Device {
         let vertex_array = device.create_vertex_array();
 
         let tile_offset_attr =
-            device.get_vertex_attr(&tile_program.program, "TileOffset").unwrap();
+            device.get_vertex_attr(&tile_program.common.program, "TileOffset").unwrap();
         let tile_origin_attr =
-            device.get_vertex_attr(&tile_program.program, "TileOrigin").unwrap();
+            device.get_vertex_attr(&tile_program.common.program, "TileOrigin").unwrap();
         let mask_0_tex_coord_attr =
-            device.get_vertex_attr(&tile_program.program, "MaskTexCoord0").unwrap();
+            device.get_vertex_attr(&tile_program.common.program, "MaskTexCoord0").unwrap();
         let ctrl_backdrop_attr =
-            device.get_vertex_attr(&tile_program.program, "CtrlBackdrop").unwrap();
-        let color_attr = device.get_vertex_attr(&tile_program.program, "Color").unwrap();
-        let path_index_attr = device.get_vertex_attr(&tile_program.program, "PathIndex").unwrap();
+            device.get_vertex_attr(&tile_program.common.program, "CtrlBackdrop").unwrap();
+        let color_attr = device.get_vertex_attr(&tile_program.common.program, "Color").unwrap();
+        let path_index_attr = device.get_vertex_attr(&tile_program.common.program, "PathIndex")
+                                    .unwrap();
 
         device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, BufferTarget::Vertex);
         device.configure_vertex_attr(&vertex_array, &tile_offset_attr, &VertexAttrDescriptor {
@@ -530,15 +532,35 @@ impl<D> FillComputeProgram<D> where D: Device {
     }
 }
 
-pub struct TileProgram<D> where D: Device {
-    pub program: D::Program,
+pub enum TileProgram<D> where D: Device {
+    Raster(TileRasterProgram<D>),
+    Compute(TileComputeProgram<D>),
+}
+
+pub struct TileRasterProgram<D> where D: Device {
+    pub common: TileProgramCommon<D>,
+    pub dest_texture: D::TextureParameter,
     pub transform_uniform: D::Uniform,
+}
+
+pub struct TileComputeProgram<D> where D: Device {
+    pub common: TileProgramCommon<D>,
+    pub load_action_uniform: D::Uniform,
+    pub clear_color_uniform: D::Uniform,
+    pub framebuffer_tile_size_uniform: D::Uniform,
+    pub dest_image: D::ImageParameter,
+    pub tiles_storage_buffer: D::StorageBuffer,
+    pub tile_link_map_storage_buffer: D::StorageBuffer,
+    pub first_tile_map_storage_buffer: D::StorageBuffer,
+}
+
+pub struct TileProgramCommon<D> where D: Device {
+    pub program: D::Program,
     pub tile_size_uniform: D::Uniform,
     pub texture_metadata_texture: D::TextureParameter,
     pub texture_metadata_size_uniform: D::Uniform,
     pub z_buffer_texture: D::TextureParameter,
     pub z_buffer_texture_size_uniform: D::Uniform,
-    pub dest_texture: D::TextureParameter,
     pub color_texture_0: D::TextureParameter,
     pub color_texture_size_0_uniform: D::Uniform,
     pub color_texture_1: D::TextureParameter,
@@ -553,15 +575,62 @@ pub struct TileProgram<D> where D: Device {
 }
 
 impl<D> TileProgram<D> where D: Device {
-    pub fn new(device: &D, resources: &dyn ResourceLoader) -> TileProgram<D> {
+    pub fn new(device: &D, resources: &dyn ResourceLoader, renderer_level: RendererLevel)
+               -> TileProgram<D> {
+        match renderer_level {
+            RendererLevel::D3D11 => {
+                TileProgram::Compute(TileComputeProgram::new(device, resources))
+            }
+            RendererLevel::D3D9 => TileProgram::Raster(TileRasterProgram::new(device, resources)),
+        }
+    }
+}
+
+impl<D> TileRasterProgram<D> where D: Device {
+    fn new(device: &D, resources: &dyn ResourceLoader) -> TileRasterProgram<D> {
         let program = device.create_raster_program(resources, "tile");
+        let dest_texture = device.get_texture_parameter(&program, "DestTexture");
         let transform_uniform = device.get_uniform(&program, "Transform");
+        let common = TileProgramCommon::new(device, program);
+        TileRasterProgram { common, dest_texture, transform_uniform }
+    }
+}
+
+impl<D> TileComputeProgram<D> where D: Device {
+    fn new(device: &D, resources: &dyn ResourceLoader) -> TileComputeProgram<D> {
+        let mut program = device.create_compute_program(resources, "tile");
+        device.set_compute_program_local_size(&mut program,
+                                              ComputeDimensions { x: 16, y: 4, z: 1 });
+
+        let load_action_uniform = device.get_uniform(&program, "LoadAction");
+        let clear_color_uniform = device.get_uniform(&program, "ClearColor");
+        let framebuffer_tile_size_uniform = device.get_uniform(&program, "FramebufferTileSize");
+        let dest_image = device.get_image_parameter(&program, "DestImage");
+        let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 0);
+        let tile_link_map_storage_buffer = device.get_storage_buffer(&program, "TileLinkMap", 1);
+        let first_tile_map_storage_buffer = device.get_storage_buffer(&program, "FirstTileMap", 2);
+
+        let common = TileProgramCommon::new(device, program);
+        TileComputeProgram {
+            common,
+            load_action_uniform,
+            clear_color_uniform,
+            framebuffer_tile_size_uniform,
+            dest_image,
+            tiles_storage_buffer,
+            tile_link_map_storage_buffer,
+            first_tile_map_storage_buffer,
+        }
+    }
+}
+
+impl<D> TileProgramCommon<D> where D: Device {
+    fn new(device: &D, program: D::Program) -> TileProgramCommon<D> {
         let tile_size_uniform = device.get_uniform(&program, "TileSize");
         let texture_metadata_texture = device.get_texture_parameter(&program, "TextureMetadata");
         let texture_metadata_size_uniform = device.get_uniform(&program, "TextureMetadataSize");
         let z_buffer_texture = device.get_texture_parameter(&program, "ZBuffer");
         let z_buffer_texture_size_uniform = device.get_uniform(&program, "ZBufferSize");
-        let dest_texture = device.get_texture_parameter(&program, "DestTexture");
         let color_texture_0 = device.get_texture_parameter(&program, "ColorTexture0");
         let color_texture_size_0_uniform = device.get_uniform(&program, "ColorTextureSize0");
         let color_texture_1 = device.get_texture_parameter(&program, "ColorTexture1");
@@ -574,15 +643,13 @@ impl<D> TileProgram<D> where D: Device {
         let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
         let ctrl_uniform = device.get_uniform(&program, "Ctrl");
 
-        TileProgram {
+        TileProgramCommon {
             program,
-            transform_uniform,
             tile_size_uniform,
             texture_metadata_texture,
             texture_metadata_size_uniform,
             z_buffer_texture,
             z_buffer_texture_size_uniform,
-            dest_texture,
             color_texture_0,
             color_texture_size_0_uniform,
             color_texture_1,
@@ -659,6 +726,7 @@ pub struct D3D11Programs<D> where D: Device {
     pub dice_compute_program: DiceComputeProgram<D>,
     pub blit_buffer_program: BlitBufferProgram<D>,
     pub propagate_program: PropagateProgram<D>,
+    pub sort_program: SortProgram<D>,
 }
 
 impl<D> D3D11Programs<D> where D: Device {
@@ -669,6 +737,7 @@ impl<D> D3D11Programs<D> where D: Device {
             dice_compute_program: DiceComputeProgram::new(device, resources),
             blit_buffer_program: BlitBufferProgram::new(device, resources),
             propagate_program: PropagateProgram::new(device, resources),
+            sort_program: SortProgram::new(device, resources),
         }
     }
 }
@@ -684,6 +753,9 @@ pub struct PropagateProgram<D> where D: Device {
     pub clip_tiles_storage_buffer: D::StorageBuffer,
     pub clip_vertex_storage_buffer: D::StorageBuffer,
     pub z_buffer_storage_buffer: D::StorageBuffer,
+    pub tile_link_map_storage_buffer: D::StorageBuffer,
+    pub first_tile_map_storage_buffer: D::StorageBuffer,
+    pub indirect_draw_params_storage_buffer: D::StorageBuffer,
 }
 
 impl<D> PropagateProgram<D> where D: Device {
@@ -702,6 +774,11 @@ impl<D> PropagateProgram<D> where D: Device {
         let clip_vertex_storage_buffer =
             device.get_storage_buffer(&program, "ClipVertexBuffer", 5);
         let z_buffer_storage_buffer = device.get_storage_buffer(&program, "ZBuffer", 6);
+        let tile_link_map_storage_buffer = device.get_storage_buffer(&program, "TileLinkMap", 7);
+        let first_tile_map_storage_buffer = device.get_storage_buffer(&program, "FirstTileMap", 8);
+        let indirect_draw_params_storage_buffer =
+            device.get_storage_buffer(&program, "IndirectDrawParams", 9);
+
         PropagateProgram {
             program,
             framebuffer_tile_size_uniform,
@@ -713,40 +790,31 @@ impl<D> PropagateProgram<D> where D: Device {
             clip_tiles_storage_buffer,
             clip_vertex_storage_buffer,
             z_buffer_storage_buffer,
+            tile_link_map_storage_buffer,
+            first_tile_map_storage_buffer,
+            indirect_draw_params_storage_buffer,
         }
     }
 }
 
-pub struct StencilProgram<D>
-where
-    D: Device,
-{
+pub struct StencilProgram<D> where D: Device {
     pub program: D::Program,
 }
 
-impl<D> StencilProgram<D>
-where
-    D: Device,
-{
+impl<D> StencilProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> StencilProgram<D> {
         let program = device.create_raster_program(resources, "stencil");
         StencilProgram { program }
     }
 }
 
-pub struct StencilVertexArray<D>
-where
-    D: Device,
-{
+pub struct StencilVertexArray<D> where D: Device {
     pub vertex_array: D::VertexArray,
     pub vertex_buffer: D::Buffer,
     pub index_buffer: D::Buffer,
 }
 
-impl<D> StencilVertexArray<D>
-where
-    D: Device,
-{
+impl<D> StencilVertexArray<D> where D: Device {
     pub fn new(device: &D, stencil_program: &StencilProgram<D>) -> StencilVertexArray<D> {
         let vertex_array = device.create_vertex_array();
         let vertex_buffer = device.create_buffer(BufferUploadMode::Static);
@@ -787,17 +855,11 @@ impl<D> ReprojectionProgram<D> where D: Device {
     }
 }
 
-pub struct ReprojectionVertexArray<D>
-where
-    D: Device,
-{
+pub struct ReprojectionVertexArray<D> where D: Device {
     pub vertex_array: D::VertexArray,
 }
 
-impl<D> ReprojectionVertexArray<D>
-where
-    D: Device,
-{
+impl<D> ReprojectionVertexArray<D> where D: Device {
     pub fn new(
         device: &D,
         reprojection_program: &ReprojectionProgram<D>,
@@ -949,6 +1011,32 @@ impl<D> InitProgram<D> where D: Device {
             tile_path_info_storage_buffer,
             tiles_storage_buffer,
             tile_link_map_storage_buffer,
+        }
+    }
+}
+
+pub struct SortProgram<D> where D: Device {
+    pub program: D::Program,
+    pub tile_count_uniform: D::Uniform,
+    pub tile_link_map_storage_buffer: D::StorageBuffer,
+    pub first_tile_map_storage_buffer: D::StorageBuffer,
+}
+
+impl<D> SortProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> SortProgram<D> {
+        let mut program = device.create_compute_program(resources, "sort");
+        let dimensions = ComputeDimensions { x: SORT_WORKGROUP_SIZE, y: 1, z: 1 };
+        device.set_compute_program_local_size(&mut program, dimensions);
+
+        let tile_count_uniform = device.get_uniform(&program, "TileCount");
+        let tile_link_map_storage_buffer = device.get_storage_buffer(&program, "TileLinkMap", 0);
+        let first_tile_map_storage_buffer = device.get_storage_buffer(&program, "FirstTileMap", 1);
+
+        SortProgram {
+            program,
+            tile_count_uniform,
+            tile_link_map_storage_buffer,
+            first_tile_map_storage_buffer,
         }
     }
 }

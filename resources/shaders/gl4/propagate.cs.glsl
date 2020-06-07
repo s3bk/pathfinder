@@ -69,6 +69,25 @@ layout(std430, binding = 6)buffer bZBuffer {
     restrict int iZBuffer[];
 };
 
+layout(std430, binding = 7)buffer bTileLinkMap {
+
+
+    restrict int iTileLinkMap[];
+};
+
+layout(std430, binding = 8)buffer bFirstTileMap {
+    restrict int iFirstTileMap[];
+};
+
+
+
+
+
+
+layout(std430, binding = 9)buffer bIndirectDrawParams {
+    restrict uint iIndirectDrawParams[];
+};
+
 uint calculateTileIndex(uint bufferOffset, uvec4 tileRect, uvec2 tileCoord){
     return bufferOffset + tileCoord . y *(tileRect . z - tileRect . x)+ tileCoord . x;
 }
@@ -100,11 +119,16 @@ void main(){
         uvec2 drawTileCoord = uvec2(tileX, tileY);
         uint drawTileIndex = calculateTileIndex(drawTileBufferOffset, drawTileRect, drawTileCoord);
 
-        int drawAlphaTileIndex = int(iDrawTiles[drawTileIndex * 4 + 1]);
         uint drawTileWord = iDrawTiles[drawTileIndex * 4 + 3];
 
         int delta = int(drawTileWord)>> 24;
         int drawTileBackdrop = currentBackdrop;
+
+
+
+        int drawAlphaTileIndex = - 1;
+        if(iTileLinkMap[drawTileIndex * 2 + 0]>= 0)
+            drawAlphaTileIndex = int(atomicAdd(iIndirectDrawParams[4], 1));
 
 
         if(clipPathIndex >= 0){
@@ -157,10 +181,15 @@ void main(){
             ((uint(drawTileBackdrop)& 0xff)<< 24);
 
 
-        if(zWrite && drawTileBackdrop != 0 && drawAlphaTileIndex < 0){
-            ivec2 tileCoord = ivec2(tileX, tileY)+ ivec2(drawTileRect . xy);
-            int zBufferIndex = tileCoord . y * uFramebufferTileSize . x + tileCoord . x;
-            atomicMax(iZBuffer[zBufferIndex], int(drawPathIndex));
+        ivec2 tileCoord = ivec2(tileX, tileY)+ ivec2(drawTileRect . xy);
+        int tileMapIndex = tileCoord . y * uFramebufferTileSize . x + tileCoord . x;
+        if(zWrite && drawTileBackdrop != 0 && drawAlphaTileIndex < 0)
+            atomicMax(iZBuffer[tileMapIndex], int(drawPathIndex));
+
+
+        if(drawTileBackdrop != 0 || drawAlphaTileIndex >= 0){
+            int nextTileIndex = atomicExchange(iFirstTileMap[tileMapIndex], int(drawTileIndex));
+            iTileLinkMap[drawTileIndex * 2 + 1]= nextTileIndex;
         }
 
         currentBackdrop += delta;

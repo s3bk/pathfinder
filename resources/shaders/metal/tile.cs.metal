@@ -6,24 +6,49 @@
 
 using namespace metal;
 
-struct main0_out
+struct bFirstTileMap
 {
-    float4 oFragColor [[color(0)]];
+    int iFirstTileMap[1];
 };
 
-struct main0_in
+struct bTiles
 {
-    float3 vMaskTexCoord0 [[user(locn0)]];
-    float2 vColorTexCoord0 [[user(locn1)]];
-    float4 vBaseColor [[user(locn2)]];
-    float vTileCtrl [[user(locn3)]];
+    uint iTiles[1];
 };
+
+struct bTileLinkMap
+{
+    int iTileLinkMap[1];
+};
+
+constant uint3 gl_WorkGroupSize [[maybe_unused]] = uint3(16u, 4u, 1u);
 
 // Implementation of the GLSL mod() function, which is slightly different than Metal fmod()
 template<typename Tx, typename Ty>
 inline Tx mod(Tx x, Ty y)
 {
     return x - y * floor(x / y);
+}
+
+static inline __attribute__((always_inline))
+int2 toImageCoords(thread const int2& coords, thread float2 uFramebufferSize)
+{
+    return int2(coords.x, int(uFramebufferSize.y - float(coords.y)));
+}
+
+static inline __attribute__((always_inline))
+void computeTileVaryings(thread const float2& position, thread const int& colorEntry, thread const texture2d<float> textureMetadata, thread const sampler textureMetadataSmplr, thread const int2& textureMetadataSize, thread float2& outColorTexCoord0, thread float4& outBaseColor)
+{
+    float2 textureMetadataScale = float2(1.0) / float2(textureMetadataSize);
+    float2 metadataEntryCoord = float2(float((colorEntry % 128) * 4), float(colorEntry / 128));
+    float2 colorTexMatrix0Coord = (metadataEntryCoord + float2(0.5)) * textureMetadataScale;
+    float2 colorTexOffsetsCoord = (metadataEntryCoord + float2(1.5, 0.5)) * textureMetadataScale;
+    float2 baseColorCoord = (metadataEntryCoord + float2(2.5, 0.5)) * textureMetadataScale;
+    float4 colorTexMatrix0 = textureMetadata.sample(textureMetadataSmplr, colorTexMatrix0Coord, level(0.0));
+    float4 colorTexOffsets = textureMetadata.sample(textureMetadataSmplr, colorTexOffsetsCoord, level(0.0));
+    float4 baseColor = textureMetadata.sample(textureMetadataSmplr, baseColorCoord, level(0.0));
+    outColorTexCoord0 = (float2x2(float2(colorTexMatrix0.xy), float2(colorTexMatrix0.zw)) * position) + colorTexOffsets.xy;
+    outBaseColor = baseColor;
 }
 
 static inline __attribute__((always_inline))
@@ -34,7 +59,7 @@ float sampleMask(thread const float& maskAlpha, thread const texture2d<float> ma
         return maskAlpha;
     }
     int2 maskTexCoordI = int2(floor(maskTexCoord.xy));
-    float4 texel = maskTexture.sample(maskTextureSmplr, ((float2(maskTexCoordI / int2(1, 4)) + float2(0.5)) / maskTextureSize));
+    float4 texel = maskTexture.sample(maskTextureSmplr, ((float2(maskTexCoordI / int2(1, 4)) + float2(0.5)) / maskTextureSize), level(0.0));
     float coverage = texel[maskTexCoordI.y % 4] + maskTexCoord.z;
     if ((maskCtrl & 1) != 0)
     {
@@ -69,17 +94,17 @@ float4 filterRadialGradient(thread const float2& colorTexCoord, thread const tex
         {
             ts = ts.yx;
         }
-        float _569;
+        float _584;
         if (ts.x >= 0.0)
         {
-            _569 = ts.x;
+            _584 = ts.x;
         }
         else
         {
-            _569 = ts.y;
+            _584 = ts.y;
         }
-        float t = _569;
-        color = colorTexture.sample(colorTextureSmplr, (uvOrigin + float2(fast::clamp(t, 0.0, 1.0), 0.0)));
+        float t = _584;
+        color = colorTexture.sample(colorTextureSmplr, (uvOrigin + float2(fast::clamp(t, 0.0, 1.0), 0.0)), level(0.0));
     }
     return color;
 }
@@ -91,20 +116,20 @@ float4 filterBlur(thread const float2& colorTexCoord, thread const texture2d<flo
     int support = int(filterParams0.z);
     float3 gaussCoeff = filterParams1.xyz;
     float gaussSum = gaussCoeff.x;
-    float4 color = colorTexture.sample(colorTextureSmplr, colorTexCoord) * gaussCoeff.x;
-    float2 _614 = gaussCoeff.xy * gaussCoeff.yz;
-    gaussCoeff = float3(_614.x, _614.y, gaussCoeff.z);
+    float4 color = colorTexture.sample(colorTextureSmplr, colorTexCoord, level(0.0)) * gaussCoeff.x;
+    float2 _629 = gaussCoeff.xy * gaussCoeff.yz;
+    gaussCoeff = float3(_629.x, _629.y, gaussCoeff.z);
     for (int i = 1; i <= support; i += 2)
     {
         float gaussPartialSum = gaussCoeff.x;
-        float2 _634 = gaussCoeff.xy * gaussCoeff.yz;
-        gaussCoeff = float3(_634.x, _634.y, gaussCoeff.z);
+        float2 _649 = gaussCoeff.xy * gaussCoeff.yz;
+        gaussCoeff = float3(_649.x, _649.y, gaussCoeff.z);
         gaussPartialSum += gaussCoeff.x;
         float2 srcOffset = srcOffsetScale * (float(i) + (gaussCoeff.x / gaussPartialSum));
-        color += ((colorTexture.sample(colorTextureSmplr, (colorTexCoord - srcOffset)) + colorTexture.sample(colorTextureSmplr, (colorTexCoord + srcOffset))) * gaussPartialSum);
+        color += ((colorTexture.sample(colorTextureSmplr, (colorTexCoord - srcOffset), level(0.0)) + colorTexture.sample(colorTextureSmplr, (colorTexCoord + srcOffset), level(0.0))) * gaussPartialSum);
         gaussSum += (2.0 * gaussPartialSum);
-        float2 _674 = gaussCoeff.xy * gaussCoeff.yz;
-        gaussCoeff = float3(_674.x, _674.y, gaussCoeff.z);
+        float2 _689 = gaussCoeff.xy * gaussCoeff.yz;
+        gaussCoeff = float3(_689.x, _689.y, gaussCoeff.z);
     }
     return color / float4(gaussSum);
 }
@@ -112,23 +137,23 @@ float4 filterBlur(thread const float2& colorTexCoord, thread const texture2d<flo
 static inline __attribute__((always_inline))
 float filterTextSample1Tap(thread const float& offset, thread const texture2d<float> colorTexture, thread const sampler colorTextureSmplr, thread const float2& colorTexCoord)
 {
-    return colorTexture.sample(colorTextureSmplr, (colorTexCoord + float2(offset, 0.0))).x;
+    return colorTexture.sample(colorTextureSmplr, (colorTexCoord + float2(offset, 0.0)), level(0.0)).x;
 }
 
 static inline __attribute__((always_inline))
 void filterTextSample9Tap(thread float4& outAlphaLeft, thread float& outAlphaCenter, thread float4& outAlphaRight, thread const texture2d<float> colorTexture, thread const sampler colorTextureSmplr, thread const float2& colorTexCoord, thread const float4& kernel0, thread const float& onePixel)
 {
     bool wide = kernel0.x > 0.0;
-    float _250;
+    float _265;
     if (wide)
     {
         float param = (-4.0) * onePixel;
         float2 param_1 = colorTexCoord;
-        _250 = filterTextSample1Tap(param, colorTexture, colorTextureSmplr, param_1);
+        _265 = filterTextSample1Tap(param, colorTexture, colorTextureSmplr, param_1);
     }
     else
     {
-        _250 = 0.0;
+        _265 = 0.0;
     }
     float param_2 = (-3.0) * onePixel;
     float2 param_3 = colorTexCoord;
@@ -136,7 +161,7 @@ void filterTextSample9Tap(thread float4& outAlphaLeft, thread float& outAlphaCen
     float2 param_5 = colorTexCoord;
     float param_6 = (-1.0) * onePixel;
     float2 param_7 = colorTexCoord;
-    outAlphaLeft = float4(_250, filterTextSample1Tap(param_2, colorTexture, colorTextureSmplr, param_3), filterTextSample1Tap(param_4, colorTexture, colorTextureSmplr, param_5), filterTextSample1Tap(param_6, colorTexture, colorTextureSmplr, param_7));
+    outAlphaLeft = float4(_265, filterTextSample1Tap(param_2, colorTexture, colorTextureSmplr, param_3), filterTextSample1Tap(param_4, colorTexture, colorTextureSmplr, param_5), filterTextSample1Tap(param_6, colorTexture, colorTextureSmplr, param_7));
     float param_8 = 0.0;
     float2 param_9 = colorTexCoord;
     outAlphaCenter = filterTextSample1Tap(param_8, colorTexture, colorTextureSmplr, param_9);
@@ -146,18 +171,18 @@ void filterTextSample9Tap(thread float4& outAlphaLeft, thread float& outAlphaCen
     float2 param_13 = colorTexCoord;
     float param_14 = 3.0 * onePixel;
     float2 param_15 = colorTexCoord;
-    float _310;
+    float _325;
     if (wide)
     {
         float param_16 = 4.0 * onePixel;
         float2 param_17 = colorTexCoord;
-        _310 = filterTextSample1Tap(param_16, colorTexture, colorTextureSmplr, param_17);
+        _325 = filterTextSample1Tap(param_16, colorTexture, colorTextureSmplr, param_17);
     }
     else
     {
-        _310 = 0.0;
+        _325 = 0.0;
     }
-    outAlphaRight = float4(filterTextSample1Tap(param_10, colorTexture, colorTextureSmplr, param_11), filterTextSample1Tap(param_12, colorTexture, colorTextureSmplr, param_13), filterTextSample1Tap(param_14, colorTexture, colorTextureSmplr, param_15), _310);
+    outAlphaRight = float4(filterTextSample1Tap(param_10, colorTexture, colorTextureSmplr, param_11), filterTextSample1Tap(param_12, colorTexture, colorTextureSmplr, param_13), filterTextSample1Tap(param_14, colorTexture, colorTextureSmplr, param_15), _325);
 }
 
 static inline __attribute__((always_inline))
@@ -169,7 +194,7 @@ float filterTextConvolve7Tap(thread const float4& alpha0, thread const float3& a
 static inline __attribute__((always_inline))
 float filterTextGammaCorrectChannel(thread const float& bgColor, thread const float& fgColor, thread const texture2d<float> gammaLUT, thread const sampler gammaLUTSmplr)
 {
-    return gammaLUT.sample(gammaLUTSmplr, float2(fgColor, 1.0 - bgColor)).x;
+    return gammaLUT.sample(gammaLUTSmplr, float2(fgColor, 1.0 - bgColor), level(0.0)).x;
 }
 
 static inline __attribute__((always_inline))
@@ -194,7 +219,7 @@ float4 filterText(thread const float2& colorTexCoord, thread const texture2d<flo
     float3 alpha;
     if (kernel0.w == 0.0)
     {
-        alpha = colorTexture.sample(colorTextureSmplr, colorTexCoord).xxx;
+        alpha = colorTexture.sample(colorTextureSmplr, colorTexCoord, level(0.0)).xxx;
     }
     else
     {
@@ -234,7 +259,7 @@ float4 filterText(thread const float2& colorTexCoord, thread const texture2d<flo
 static inline __attribute__((always_inline))
 float4 sampleColor(thread const texture2d<float> colorTexture, thread const sampler colorTextureSmplr, thread const float2& colorTexCoord)
 {
-    return colorTexture.sample(colorTextureSmplr, colorTexCoord);
+    return colorTexture.sample(colorTextureSmplr, colorTexCoord, level(0.0));
 }
 
 static inline __attribute__((always_inline))
@@ -307,34 +332,34 @@ float3 compositeScreen(thread const float3& destColor, thread const float3& srcC
 static inline __attribute__((always_inline))
 float3 compositeSelect(thread const bool3& cond, thread const float3& ifTrue, thread const float3& ifFalse)
 {
-    float _740;
+    float _755;
     if (cond.x)
     {
-        _740 = ifTrue.x;
+        _755 = ifTrue.x;
     }
     else
     {
-        _740 = ifFalse.x;
+        _755 = ifFalse.x;
     }
-    float _751;
+    float _766;
     if (cond.y)
     {
-        _751 = ifTrue.y;
+        _766 = ifTrue.y;
     }
     else
     {
-        _751 = ifFalse.y;
+        _766 = ifFalse.y;
     }
-    float _762;
+    float _777;
     if (cond.z)
     {
-        _762 = ifTrue.z;
+        _777 = ifTrue.z;
     }
     else
     {
-        _762 = ifFalse.z;
+        _777 = ifFalse.z;
     }
-    return float3(_740, _751, _762);
+    return float3(_755, _766, _777);
 }
 
 static inline __attribute__((always_inline))
@@ -379,16 +404,16 @@ float3 compositeSoftLight(thread const float3& destColor, thread const float3& s
 static inline __attribute__((always_inline))
 float compositeDivide(thread const float& num, thread const float& denom)
 {
-    float _776;
+    float _791;
     if (denom != 0.0)
     {
-        _776 = num / denom;
+        _791 = num / denom;
     }
     else
     {
-        _776 = 0.0;
+        _791 = 0.0;
     }
-    return _776;
+    return _791;
 }
 
 static inline __attribute__((always_inline))
@@ -398,25 +423,25 @@ float3 compositeRGBToHSL(thread const float3& rgb)
     float xMin = fast::min(fast::min(rgb.x, rgb.y), rgb.z);
     float c = v - xMin;
     float l = mix(xMin, v, 0.5);
-    float3 _882;
+    float3 _897;
     if (rgb.x == v)
     {
-        _882 = float3(0.0, rgb.yz);
+        _897 = float3(0.0, rgb.yz);
     }
     else
     {
-        float3 _895;
+        float3 _910;
         if (rgb.y == v)
         {
-            _895 = float3(2.0, rgb.zx);
+            _910 = float3(2.0, rgb.zx);
         }
         else
         {
-            _895 = float3(4.0, rgb.xy);
+            _910 = float3(4.0, rgb.xy);
         }
-        _882 = _895;
+        _897 = _910;
     }
-    float3 terms = _882;
+    float3 terms = _897;
     float param = ((terms.x * c) + terms.y) - terms.z;
     float param_1 = c;
     float h = 1.0471975803375244140625 * compositeDivide(param, param_1);
@@ -544,7 +569,7 @@ float4 composite(thread const float4& srcColor, thread const texture2d<float> de
         return srcColor;
     }
     float2 destTexCoord = fragCoord / destTextureSize;
-    float4 destColor = destTexture.sample(destTextureSmplr, destTexCoord);
+    float4 destColor = destTexture.sample(destTextureSmplr, destTexCoord, level(0.0));
     float3 param = destColor.xyz;
     float3 param_1 = srcColor.xyz;
     int param_2 = op;
@@ -588,27 +613,73 @@ float4 calculateColor(thread const float2& fragCoord, thread const texture2d<flo
     float2 param_17 = fragCoord;
     int param_18 = compositeOp;
     color = composite(param_15, destTexture, destTextureSmplr, param_16, param_17, param_18);
-    float3 _1340 = color.xyz * color.w;
-    color = float4(_1340.x, _1340.y, _1340.z, color.w);
+    float3 _1353 = color.xyz * color.w;
+    color = float4(_1353.x, _1353.y, _1353.z, color.w);
     return color;
 }
 
-fragment main0_out main0(main0_in in [[stage_in]], constant int& uCtrl [[buffer(6)]], constant float2& uColorTextureSize0 [[buffer(0)]], constant float2& uMaskTextureSize0 [[buffer(1)]], constant float4& uFilterParams0 [[buffer(2)]], constant float4& uFilterParams1 [[buffer(3)]], constant float4& uFilterParams2 [[buffer(4)]], constant float2& uFramebufferSize [[buffer(5)]], texture2d<float> uColorTexture0 [[texture(0)]], texture2d<float> uMaskTexture0 [[texture(1)]], texture2d<float> uDestTexture [[texture(2)]], texture2d<float> uGammaLUT [[texture(3)]], sampler uColorTexture0Smplr [[sampler(0)]], sampler uMaskTexture0Smplr [[sampler(1)]], sampler uDestTextureSmplr [[sampler(2)]], sampler uGammaLUTSmplr [[sampler(3)]], float4 gl_FragCoord [[position]])
+kernel void main0(constant int& uLoadAction [[buffer(2)]], constant int2& uFramebufferTileSize [[buffer(5)]], constant int2& uTextureMetadataSize [[buffer(7)]], constant int& uCtrl [[buffer(13)]], constant float2& uFramebufferSize [[buffer(0)]], constant float2& uTileSize [[buffer(1)]], constant float4& uClearColor [[buffer(3)]], constant float2& uColorTextureSize0 [[buffer(8)]], constant float2& uMaskTextureSize0 [[buffer(9)]], constant float4& uFilterParams0 [[buffer(10)]], constant float4& uFilterParams1 [[buffer(11)]], constant float4& uFilterParams2 [[buffer(12)]], device bFirstTileMap& _1502 [[buffer(4)]], device bTiles& _1548 [[buffer(6)]], device bTileLinkMap& _1668 [[buffer(14)]], texture2d<float, access::read_write> uDestImage [[texture(0)]], texture2d<float> uTextureMetadata [[texture(1)]], texture2d<float> uColorTexture0 [[texture(2)]], texture2d<float> uMaskTexture0 [[texture(3)]], texture2d<float> uDestTexture [[texture(4)]], texture2d<float> uGammaLUT [[texture(5)]], sampler uTextureMetadataSmplr [[sampler(0)]], sampler uColorTexture0Smplr [[sampler(1)]], sampler uMaskTexture0Smplr [[sampler(2)]], sampler uDestTextureSmplr [[sampler(3)]], sampler uGammaLUTSmplr [[sampler(4)]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]], uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]])
 {
-    main0_out out = {};
-    float2 param = gl_FragCoord.xy;
-    float2 param_1 = uColorTextureSize0;
-    float2 param_2 = uMaskTextureSize0;
-    float4 param_3 = uFilterParams0;
-    float4 param_4 = uFilterParams1;
-    float4 param_5 = uFilterParams2;
-    float2 param_6 = uFramebufferSize;
-    int param_7 = uCtrl;
-    float3 param_8 = in.vMaskTexCoord0;
-    float2 param_9 = in.vColorTexCoord0;
-    float4 param_10 = in.vBaseColor;
-    int param_11 = int(in.vTileCtrl);
-    out.oFragColor = calculateColor(param, uColorTexture0, uColorTexture0Smplr, uMaskTexture0, uMaskTexture0Smplr, uDestTexture, uDestTextureSmplr, uGammaLUT, uGammaLUTSmplr, param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8, param_9, param_10, param_11);
-    return out;
+    int2 tileCoord = int2(gl_WorkGroupID.xy);
+    int2 firstTileSubCoord = int2(gl_LocalInvocationID.xy) * int2(1, 4);
+    int2 firstFragCoord = (tileCoord * int2(uTileSize)) + firstTileSubCoord;
+    float4x4 destColors;
+    for (int subY = 0; subY < 4; subY++)
+    {
+        if (uLoadAction == 0)
+        {
+            destColors[subY] = uClearColor;
+        }
+        else
+        {
+            int2 param = firstFragCoord + int2(0, subY);
+            int2 imageCoords = toImageCoords(param, uFramebufferSize);
+            destColors[subY] = uDestImage.read(uint2(imageCoords));
+        }
+    }
+    int tileIndex = _1502.iFirstTileMap[tileCoord.x + (uFramebufferTileSize.x * tileCoord.y)];
+    float2 param_4;
+    float4 param_5;
+    while (tileIndex >= 0)
+    {
+        for (int subY_1 = 0; subY_1 < 4; subY_1++)
+        {
+            int2 tileSubCoord = firstTileSubCoord + int2(0, subY_1);
+            float2 fragCoord = float2(firstFragCoord + int2(0, subY_1)) + float2(0.5);
+            uint alphaTileIndex = uint(int(_1548.iTiles[(tileIndex * 4) + 1]));
+            uint tileControlWord = _1548.iTiles[(tileIndex * 4) + 3];
+            uint colorEntry = tileControlWord & 65535u;
+            int tileCtrl = int((tileControlWord >> uint(16)) & 255u);
+            int backdrop = int(tileControlWord) >> 24;
+            uint2 maskTileCoord = uint2(alphaTileIndex & 255u, alphaTileIndex >> uint(8)) * uint2(uTileSize);
+            float3 maskTexCoord0 = float3(float2(int2(maskTileCoord) + tileSubCoord), float(backdrop));
+            float2 param_1 = fragCoord;
+            int param_2 = int(colorEntry);
+            int2 param_3 = uTextureMetadataSize;
+            computeTileVaryings(param_1, param_2, uTextureMetadata, uTextureMetadataSmplr, param_3, param_4, param_5);
+            float2 colorTexCoord0 = param_4;
+            float4 baseColor = param_5;
+            float2 param_6 = fragCoord;
+            float2 param_7 = uColorTextureSize0;
+            float2 param_8 = uMaskTextureSize0;
+            float4 param_9 = uFilterParams0;
+            float4 param_10 = uFilterParams1;
+            float4 param_11 = uFilterParams2;
+            float2 param_12 = uFramebufferSize;
+            int param_13 = uCtrl;
+            float3 param_14 = maskTexCoord0;
+            float2 param_15 = colorTexCoord0;
+            float4 param_16 = baseColor;
+            int param_17 = tileCtrl;
+            float4 srcColor = calculateColor(param_6, uColorTexture0, uColorTexture0Smplr, uMaskTexture0, uMaskTexture0Smplr, uDestTexture, uDestTextureSmplr, uGammaLUT, uGammaLUTSmplr, param_7, param_8, param_9, param_10, param_11, param_12, param_13, param_14, param_15, param_16, param_17);
+            destColors[subY_1] = (destColors[subY_1] * (1.0 - srcColor.w)) + srcColor;
+        }
+        tileIndex = _1668.iTileLinkMap[(tileIndex * 2) + 1];
+    }
+    for (int subY_2 = 0; subY_2 < 4; subY_2++)
+    {
+        int2 param_18 = firstFragCoord + int2(0, subY_2);
+        uDestImage.write(destColors[subY_2], uint2(toImageCoords(param_18, uFramebufferSize)));
+    }
 }
 

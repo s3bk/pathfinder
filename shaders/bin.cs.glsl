@@ -62,7 +62,9 @@ layout(std430, binding = 4) buffer bTiles {
 };
 
 layout(std430, binding = 5) buffer bTileLinkMap {
-    restrict uint iTileLinkMap[];
+    // [0]: index of first fill in this tile
+    // [1]: index of next tile
+    restrict int iTileLinkMap[];
 };
 
 layout(std430, binding = 6) buffer bBackdrops {
@@ -102,15 +104,11 @@ void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTi
     if (scaledLocalLine.x == scaledLocalLine.z)
         return;
 
-    // Allocate an alpha tile if necessary.
-    if (int(atomicAnd(iTiles[tileIndex * 4 + 1], 0x7fffffffu)) < 0)
-        atomicExchange(iTiles[tileIndex * 4 + 1], atomicAdd(iIndirectDrawParams[4], 1));
-
     // Bump instance count.
     uint fillIndex = atomicAdd(iIndirectDrawParams[1], 1);
 
     // Fill out the link field, inserting into the linked list.
-    uint fillLink = atomicExchange(iTileLinkMap[tileIndex], fillIndex);
+    uint fillLink = atomicExchange(iTileLinkMap[tileIndex * 2 + 0], int(fillIndex));
 
     // Write fill.
     if (fillIndex < uMaxFillCount) {

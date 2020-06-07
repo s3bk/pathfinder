@@ -44,6 +44,8 @@ layout(std430, binding = 1)buffer bTiles {
 };
 
 layout(std430, binding = 2)buffer bTileLinkMap {
+
+
     restrict int iTileLinkMap[];
 };
 
@@ -83,6 +85,7 @@ void main(){
                               pathIndex,
                               pathInfo . w);
 
-    iTileLinkMap[tileIndex]= - 1;
+    iTileLinkMap[tileIndex * 2 + 0]= - 1;
+    iTileLinkMap[tileIndex * 2 + 1]= - 1;
 }
 
