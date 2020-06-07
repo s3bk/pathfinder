@@ -43,6 +43,7 @@ COMPUTE_SHADERS=\
 
 INCLUDES=\
 	fill_area.inc.glsl \
+	fill_compute.inc.glsl \
 	tile_fragment.inc.glsl \
 	tile_vertex.inc.glsl \
 	$(EMPTY)
