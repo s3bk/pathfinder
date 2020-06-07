@@ -66,11 +66,7 @@ uint calculateTileIndex(uint bufferOffset, uvec4 tileRect, uvec2 tileCoord) {
 }
 
 ivec2 toImageCoords(ivec2 coords) {
-#ifdef PF_ORIGIN_UPPER_LEFT
     return ivec2(coords.x, uFramebufferSize.y - coords.y);
-#else
-    return coords;
-#endif
 }
 
 void main() {

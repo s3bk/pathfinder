@@ -36,10 +36,10 @@ void setNext(thread const int& tileIndex, thread const int& newNextTileIndex, de
     v_37.iTileLinkMap[(tileIndex * 2) + 1] = newNextTileIndex;
 }
 
-kernel void main0(constant uint& uTileCount [[buffer(2)]], device bFirstTileMap& v_26 [[buffer(0)]], device bTileLinkMap& v_37 [[buffer(1)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
+kernel void main0(constant int& uTileCount [[buffer(2)]], device bFirstTileMap& v_26 [[buffer(0)]], device bTileLinkMap& v_37 [[buffer(1)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
 {
     uint globalTileIndex = gl_GlobalInvocationID.x;
-    if (globalTileIndex >= uTileCount)
+    if (globalTileIndex >= uint(uTileCount))
     {
         return;
     }

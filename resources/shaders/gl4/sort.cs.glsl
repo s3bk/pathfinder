@@ -20,7 +20,7 @@ precision highp float;
 
 
 
-uniform uint uTileCount;
+uniform int uTileCount;
 
 layout(std430, binding = 0)buffer bTileLinkMap {
 
@@ -48,7 +48,7 @@ void setNext(int tileIndex, int newNextTileIndex){
 
 void main(){
     uint globalTileIndex = gl_GlobalInvocationID . x;
-    if(globalTileIndex >= uTileCount)
+    if(globalTileIndex >= uint(uTileCount))
         return;
 
     int unsortedFirstTileIndex = getFirst(globalTileIndex);
