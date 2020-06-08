@@ -1,9 +1,0 @@
-[package]
-name = "pathfinder_builder"
-version = "0.1.0"
-authors = ["Sebastian Köln <s3bk@protonmail.com>"]
-edition = "2018"
-
-[dependencies]
-pathfinder_geometry = { path = "../geometry" }
-pathfinder_content = { path = "../content" }

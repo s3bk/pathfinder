@@ -115,6 +115,7 @@ impl Canvas {
     }
 }
 
+#[derive(Clone)]
 pub struct CanvasRenderingContext2D {
     canvas: Canvas,
     current_state: State,

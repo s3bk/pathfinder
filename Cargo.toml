@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "builder",
     "c",
     "canvas",
     "color",
@@ -39,7 +38,6 @@ members = [
 ]
 
 default-members = [
-    "builder",
     "c",
     "canvas",
     "content",

@@ -918,7 +918,7 @@ dependencies = [
  "itertools 0.8.2",
  "log",
  "nom",
- "pathfinder_builder 0.1.0 (git+https://github.com/s3bk/pathfinder/)",
+ "pathfinder_builder",
  "pathfinder_color",
  "pathfinder_content",
  "pathfinder_geometry",
@@ -1961,14 +1961,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pathfinder_builder"
-version = "0.1.0"
-dependencies = [
- "pathfinder_content",
- "pathfinder_geometry",
-]
-
-[[package]]
 name = "pathfinder_c"
 version = "0.1.0"
 dependencies = [
@@ -2310,7 +2302,7 @@ dependencies = [
  "font",
  "itertools 0.9.0",
  "log",
- "pathfinder_builder 0.1.0 (git+https://github.com/s3bk/pathfinder/)",
+ "pathfinder_builder",
  "pathfinder_color",
  "pathfinder_content",
  "pathfinder_geometry",
