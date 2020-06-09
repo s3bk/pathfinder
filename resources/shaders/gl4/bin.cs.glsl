@@ -12,7 +12,14 @@
 
 
 
+
+
 #extension GL_GOOGLE_include_directive : enable
+
+
+
+
+
 
 
 
@@ -60,16 +67,14 @@ layout(std430, binding = 3)buffer bFills {
 };
 
 layout(std430, binding = 4)buffer bTiles {
+
+
+
+
     restrict uint iTiles[];
 };
 
-layout(std430, binding = 5)buffer bTileLinkMap {
-
-
-    restrict int iTileLinkMap[];
-};
-
-layout(std430, binding = 6)buffer bBackdrops {
+layout(std430, binding = 5)buffer bBackdrops {
 
 
 
@@ -110,7 +115,8 @@ void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTi
     uint fillIndex = atomicAdd(iIndirectDrawParams[1], 1);
 
 
-    uint fillLink = atomicExchange(iTileLinkMap[tileIndex * 2 + 0], int(fillIndex));
+    uint fillLink = atomicExchange(iTiles[tileIndex * 4 + 1],
+                                   int(fillIndex));
 
 
     if(fillIndex < uMaxFillCount){
@@ -133,7 +139,8 @@ void adjustBackdrop(int backdropDelta,
         }
     } else {
         uint tileIndex = computeTileIndexNoCheck(tileCoords, pathTileRect, pathTileOffset);
-        atomicAdd(iTiles[tileIndex * 4 + 3], backdropDelta << 24);
+        atomicAdd(iTiles[tileIndex * 4 + 2],
+                  uint(backdropDelta)<< 24);
     }
 }
 

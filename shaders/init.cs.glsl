@@ -20,6 +20,11 @@ precision highp float;
 precision highp sampler2D;
 #endif
 
+#define TILE_FIELD_NEXT_TILE_ID             0
+#define TILE_FIELD_FIRST_FILL_ID            1
+#define TILE_FIELD_BACKDROP_ALPHA_TILE_ID   2
+#define TILE_FIELD_CONTROL                  3
+
 layout(local_size_x = 64) in;
 
 uniform int uPathCount;
@@ -34,17 +39,11 @@ layout(std430, binding = 0) buffer bTilePathInfo {
 };
 
 layout(std430, binding = 1) buffer bTiles {
-    // x: tile coords, 16-bit packed x/y
-    // y: alpha tile ID (initialized to -1)
-    // z: path ID
-    // w: color/ctrl/backdrop word
-    restrict uvec4 iTiles[];
-};
-
-layout(std430, binding = 2) buffer bTileLinkMap {
-    // [0]: index of first fill in this tile
-    // [1]: index of next tile
-    restrict int iTileLinkMap[];
+    // [0]: next tile ID (initialized to -1)
+    // [1]: first fill ID (initialized to -1)
+    // [2]: backdrop delta upper 8 bits, alpha tile ID lower 24 (initialized to 0, -1 respectively)
+    // [3]: color/ctrl/backdrop word
+    restrict uint iTiles[];
 };
 
 void main() {
@@ -78,11 +77,8 @@ void main() {
     uint tileWidth = uint(tileRect.z - tileRect.x);
     ivec2 tileCoords = tileRect.xy + ivec2(tileOffset % tileWidth, tileOffset / tileWidth);
 
-    iTiles[tileIndex] = uvec4((uint(tileCoords.x) & 0xffffu) | (uint(tileCoords.y) << 16),
-                              ~0u,
-                              pathIndex,
-                              pathInfo.w);
-
-    iTileLinkMap[tileIndex * 2 + 0] = -1;
-    iTileLinkMap[tileIndex * 2 + 1] = -1;
+    iTiles[tileIndex * 4 + TILE_FIELD_NEXT_TILE_ID] = ~0u;
+    iTiles[tileIndex * 4 + TILE_FIELD_FIRST_FILL_ID] = ~0u;
+    iTiles[tileIndex * 4 + TILE_FIELD_BACKDROP_ALPHA_TILE_ID] = 0x00ffffffu;
+    iTiles[tileIndex * 4 + TILE_FIELD_CONTROL] = pathInfo.w;
 }

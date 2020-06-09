@@ -248,6 +248,14 @@ pub struct TileBatchTexture {
     pub composite_op: PaintCompositeOp,
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[repr(C)]
+pub struct TileId(pub i32);
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[repr(C)]
+pub struct FillId(pub i32);
+
 // TODO(pcwalton): Pack better.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -264,13 +272,26 @@ pub struct TileObjectPrimitive {
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
+pub struct TileD3D11 {
+    pub next_tile_id: TileId,
+    pub first_fill_id: FillId,
+    pub alpha_tile_id_lo: i16,
+    pub alpha_tile_id_hi: i8,
+    pub backdrop_delta: i8,
+    pub color: u16,
+    pub ctrl: u8,
+    pub backdrop: i8,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
 pub struct TilePathInfo {
     pub tile_min_x: i16,
     pub tile_min_y: i16,
     pub tile_max_x: i16,
     pub tile_max_y: i16,
     pub first_tile_index: u32,
-    // Must match the order in `TileObjectPrimitive`.
+    // Must match the order in `TileD3D11`.
     pub color: u16,
     pub ctrl: u8,
     pub backdrop: i8,

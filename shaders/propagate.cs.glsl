@@ -22,6 +22,11 @@ precision highp sampler2D;
 
 layout(local_size_x = 64) in;
 
+#define TILE_FIELD_NEXT_TILE_ID             0
+#define TILE_FIELD_FIRST_FILL_ID            1
+#define TILE_FIELD_BACKDROP_ALPHA_TILE_ID   2
+#define TILE_FIELD_CONTROL                  3
+
 uniform ivec2 uFramebufferTileSize;
 uniform int uColumnCount;
 
@@ -52,10 +57,18 @@ layout(std430, binding = 2) buffer bBackdrops {
 };
 
 layout(std430, binding = 3) buffer bDrawTiles {
+    // [0]: next tile ID
+    // [1]: first fill ID
+    // [2]: backdrop delta upper 8 bits, alpha tile ID lower 24
+    // [3]: color/ctrl/backdrop word
     restrict uint iDrawTiles[];
 };
 
 layout(std430, binding = 4) buffer bClipTiles {
+    // [0]: next tile ID
+    // [1]: first fill ID
+    // [2]: backdrop delta upper 8 bits, alpha tile ID lower 24
+    // [3]: color/ctrl/backdrop word
     restrict uint iClipTiles[];
 };
 
@@ -67,23 +80,22 @@ layout(std430, binding = 6) buffer bZBuffer {
     restrict int iZBuffer[];
 };
 
-layout(std430, binding = 7) buffer bTileLinkMap {
-    // [0]: index of first fill in this tile
-    // [1]: index of next tile
-    restrict int iTileLinkMap[];
-};
-
-layout(std430, binding = 8) buffer bFirstTileMap {
+layout(std430, binding = 7) buffer bFirstTileMap {
     restrict int iFirstTileMap[];
 };
 
-// [0]: vertexCount (6)
-// [1]: instanceCount (of fills)
-// [2]: vertexStart (0)
-// [3]: baseInstance (0)
-// [4]: alpha tile count
-layout(std430, binding = 9) buffer bIndirectDrawParams {
+layout(std430, binding = 8) buffer bIndirectDrawParams {
+    // [0]: vertexCount (6)
+    // [1]: instanceCount (of fills)
+    // [2]: vertexStart (0)
+    // [3]: baseInstance (0)
+    // [4]: alpha tile count
     restrict uint iIndirectDrawParams[];
+};
+
+layout(std430, binding = 9) buffer bAlphaTileIndices {
+    // List of alpha tile indices.
+    restrict uint iAlphaTileIndices[];
 };
 
 uint calculateTileIndex(uint bufferOffset, uvec4 tileRect, uvec2 tileCoord) {
@@ -117,16 +129,20 @@ void main() {
         uvec2 drawTileCoord = uvec2(tileX, tileY);
         uint drawTileIndex = calculateTileIndex(drawTileBufferOffset, drawTileRect, drawTileCoord);
 
-        uint drawTileWord = iDrawTiles[drawTileIndex * 4 + 3];
+        int drawAlphaTileIndex = -1;
+        int drawFirstFillIndex = int(iDrawTiles[drawTileIndex * 4 + TILE_FIELD_FIRST_FILL_ID]);
+        int drawBackdropDelta =
+            int(iDrawTiles[drawTileIndex * 4 + TILE_FIELD_BACKDROP_ALPHA_TILE_ID]) >> 24;
+        uint drawTileWord = iDrawTiles[drawTileIndex * 4 + TILE_FIELD_CONTROL];
 
-        int delta = int(drawTileWord) >> 24;
         int drawTileBackdrop = currentBackdrop;
 
         // Allocate an alpha tile if necessary.
         // TODO(pcwalton): Don't do this if we're just going to overwrite it later.
-        int drawAlphaTileIndex = -1;
-        if (iTileLinkMap[drawTileIndex * 2 + 0] >= 0)
+        if (drawFirstFillIndex >= 0) {
             drawAlphaTileIndex = int(atomicAdd(iIndirectDrawParams[4], 1));
+            iAlphaTileIndices[drawAlphaTileIndex] = drawTileIndex;
+        }
 
         // Handle clip if necessary.
         if (clipPathIndex >= 0) {
@@ -174,9 +190,10 @@ void main() {
             iClipVertexBuffer[drawTileIndex] = clipTileData;
         }
 
-        iDrawTiles[drawTileIndex * 4 + 1] = drawAlphaTileIndex;
-        iDrawTiles[drawTileIndex * 4 + 3] = (drawTileWord & 0x00ffffff) |
-            ((uint(drawTileBackdrop) & 0xff) << 24);
+        iDrawTiles[drawTileIndex * 4 + TILE_FIELD_BACKDROP_ALPHA_TILE_ID] =
+            (uint(drawAlphaTileIndex) & 0x00ffffffu) | (uint(drawBackdropDelta) << 24);
+        iDrawTiles[drawTileIndex * 4 + TILE_FIELD_CONTROL] =
+            (drawTileWord & 0x00ffffff) | (uint(drawTileBackdrop) << 24);
 
         // Write to Z-buffer if necessary.
         ivec2 tileCoord = ivec2(tileX, tileY) + ivec2(drawTileRect.xy);
@@ -187,9 +204,9 @@ void main() {
         // Stitch into the linked list if necessary.
         if (drawTileBackdrop != 0 || drawAlphaTileIndex >= 0) {
             int nextTileIndex = atomicExchange(iFirstTileMap[tileMapIndex], int(drawTileIndex));
-            iTileLinkMap[drawTileIndex * 2 + 1] = nextTileIndex;
+            iDrawTiles[drawTileIndex * 4 + TILE_FIELD_NEXT_TILE_ID] = nextTileIndex;
         }
 
-        currentBackdrop += delta;
+        currentBackdrop += drawBackdropDelta;
     }
 }

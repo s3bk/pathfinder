@@ -17,9 +17,9 @@ checksum = "5d2e7343e7fc9de883d1b0341e0b13970f764c14101234857d2ddafa1cb1cac2"
 
 [[package]]
 name = "ahash"
-version = "0.3.5"
+version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f3e0bf23f51883cce372d5d5892211236856e4bb37fb942e1eb135ee0f146e3"
+checksum = "e8fd72866655d1904d6b0997d0b07ba561047d070fbe29de039031c641b61217"
 
 [[package]]
 name = "aho-corasick"
@@ -1954,7 +1954,7 @@ dependencies = [
 [[package]]
 name = "pathfinder_builder"
 version = "0.1.0"
-source = "git+https://github.com/s3bk/pathfinder/#66f0a470e6f7f8c627bc73445f73a6e6d204e272"
+source = "git+https://github.com/s3bk/pathfinder/#51a7e643ac38993325f7f9fa0893321fa28e84ed"
 dependencies = [
  "pathfinder_content",
  "pathfinder_geometry",

@@ -6,6 +6,8 @@
 
 using namespace metal;
 
+constant float3 _1056 = {};
+
 struct main0_out
 {
     float4 oFragColor [[color(0)]];

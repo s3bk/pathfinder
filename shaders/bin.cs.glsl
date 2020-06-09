@@ -10,6 +10,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// Assigns microlines to tiles.
+
 #extension GL_GOOGLE_include_directive : enable
 
 #define MAX_ITERATIONS          1024u
@@ -17,6 +19,11 @@
 #define STEP_DIRECTION_NONE     0
 #define STEP_DIRECTION_X        1
 #define STEP_DIRECTION_Y        2
+
+#define TILE_FIELD_NEXT_TILE_ID             0
+#define TILE_FIELD_FIRST_FILL_ID            1
+#define TILE_FIELD_BACKDROP_ALPHA_TILE_ID   2
+#define TILE_FIELD_CONTROL                  3
 
 precision highp float;
 
@@ -58,16 +65,14 @@ layout(std430, binding = 3) buffer bFills {
 };
 
 layout(std430, binding = 4) buffer bTiles {
+    // [0]: next tile ID (initialized to -1)
+    // [1]: first fill ID (initialized to -1)
+    // [2]: backdrop delta upper 8 bits, alpha tile ID lower 24 (initialized to 0, -1 respectively)
+    // [3]: color/ctrl/backdrop word
     restrict uint iTiles[];
 };
 
-layout(std430, binding = 5) buffer bTileLinkMap {
-    // [0]: index of first fill in this tile
-    // [1]: index of next tile
-    restrict int iTileLinkMap[];
-};
-
-layout(std430, binding = 6) buffer bBackdrops {
+layout(std430, binding = 5) buffer bBackdrops {
     // [0]: backdrop
     // [1]: tile X offset
     // [2]: path ID
@@ -108,7 +113,8 @@ void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTi
     uint fillIndex = atomicAdd(iIndirectDrawParams[1], 1);
 
     // Fill out the link field, inserting into the linked list.
-    uint fillLink = atomicExchange(iTileLinkMap[tileIndex * 2 + 0], int(fillIndex));
+    uint fillLink = atomicExchange(iTiles[tileIndex * 4 + TILE_FIELD_FIRST_FILL_ID],
+                                   int(fillIndex));
 
     // Write fill.
     if (fillIndex < uMaxFillCount) {
@@ -131,7 +137,8 @@ void adjustBackdrop(int backdropDelta,
         }
     } else {
         uint tileIndex = computeTileIndexNoCheck(tileCoords, pathTileRect, pathTileOffset);
-        atomicAdd(iTiles[tileIndex * 4 + 3], backdropDelta << 24);
+        atomicAdd(iTiles[tileIndex * 4 + TILE_FIELD_BACKDROP_ALPHA_TILE_ID],
+                  uint(backdropDelta) << 24);
     }
 }
 

@@ -18,12 +18,19 @@ precision highp float;
 precision highp sampler2D;
 #endif
 
+#define TILE_FIELD_NEXT_TILE_ID             0
+#define TILE_FIELD_FIRST_FILL_ID            1
+#define TILE_FIELD_BACKDROP_ALPHA_TILE_ID   2
+#define TILE_FIELD_CONTROL                  3
+
 uniform int uTileCount;
 
-layout(std430, binding = 0) buffer bTileLinkMap {
-    // [0]: index of first fill in this tile
-    // [1]: index of next tile
-    restrict int iTileLinkMap[];
+layout(std430, binding = 0) buffer bTiles {
+    // [0]: next tile ID
+    // [1]: first fill ID
+    // [2]: backdrop delta upper 8 bits, alpha tile ID lower 24
+    // [3]: color/ctrl/backdrop word
+    restrict uint iTiles[];
 };
 
 layout(std430, binding = 1) buffer bFirstTileMap {
@@ -36,12 +43,12 @@ int getFirst(uint globalTileIndex) {
     return iFirstTileMap[globalTileIndex];
 }
 
-int getNext(int tileIndex) {
-    return iTileLinkMap[tileIndex * 2 + 1];
+int getNextTile(int tileIndex) {
+    return int(iTiles[tileIndex * 4 + TILE_FIELD_NEXT_TILE_ID]);
 }
 
-void setNext(int tileIndex, int newNextTileIndex) {
-    iTileLinkMap[tileIndex * 2 + 1] = newNextTileIndex;
+void setNextTile(int tileIndex, int newNextTileIndex) {
+    iTiles[tileIndex * 4 + TILE_FIELD_NEXT_TILE_ID] = uint(newNextTileIndex);
 }
 
 void main() {
@@ -54,23 +61,23 @@ void main() {
 
     while (unsortedFirstTileIndex >= 0) {
         int currentTileIndex = unsortedFirstTileIndex;
-        unsortedFirstTileIndex = getNext(currentTileIndex);
+        unsortedFirstTileIndex = getNextTile(currentTileIndex);
 
         int prevTrialTileIndex = -1;
         int trialTileIndex = sortedFirstTileIndex;
         while (true) {
             if (trialTileIndex < 0 || currentTileIndex < trialTileIndex) {
                 if (prevTrialTileIndex < 0) {
-                    setNext(currentTileIndex, sortedFirstTileIndex);
+                    setNextTile(currentTileIndex, sortedFirstTileIndex);
                     sortedFirstTileIndex = currentTileIndex;
                 } else {
-                    setNext(currentTileIndex, trialTileIndex);
-                    setNext(prevTrialTileIndex, currentTileIndex);
+                    setNextTile(currentTileIndex, trialTileIndex);
+                    setNextTile(prevTrialTileIndex, currentTileIndex);
                 }
                 break;
             }
             prevTrialTileIndex = trialTileIndex;
-            trialTileIndex = getNext(trialTileIndex);
+            trialTileIndex = getNextTile(trialTileIndex);
         }
     }
 

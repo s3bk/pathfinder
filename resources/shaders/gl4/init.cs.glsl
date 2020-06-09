@@ -22,6 +22,11 @@ precision highp float;
 
 
 
+
+
+
+
+
 layout(local_size_x = 64)in;
 
 uniform int uPathCount;
@@ -40,13 +45,7 @@ layout(std430, binding = 1)buffer bTiles {
 
 
 
-    restrict uvec4 iTiles[];
-};
-
-layout(std430, binding = 2)buffer bTileLinkMap {
-
-
-    restrict int iTileLinkMap[];
+    restrict uint iTiles[];
 };
 
 void main(){
@@ -80,12 +79,9 @@ void main(){
     uint tileWidth = uint(tileRect . z - tileRect . x);
     ivec2 tileCoords = tileRect . xy + ivec2(tileOffset % tileWidth, tileOffset / tileWidth);
 
-    iTiles[tileIndex]= uvec4((uint(tileCoords . x)& 0xffffu)|(uint(tileCoords . y)<< 16),
-                              ~ 0u,
-                              pathIndex,
-                              pathInfo . w);
-
-    iTileLinkMap[tileIndex * 2 + 0]= - 1;
-    iTileLinkMap[tileIndex * 2 + 1]= - 1;
+    iTiles[tileIndex * 4 + 0]= ~ 0u;
+    iTiles[tileIndex * 4 + 1]= ~ 0u;
+    iTiles[tileIndex * 4 + 2]= 0x00ffffffu;
+    iTiles[tileIndex * 4 + 3]= pathInfo . w;
 }
 

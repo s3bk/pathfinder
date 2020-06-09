@@ -20,12 +20,19 @@ precision highp float;
 
 
 
+
+
+
+
+
 uniform int uTileCount;
 
-layout(std430, binding = 0)buffer bTileLinkMap {
+layout(std430, binding = 0)buffer bTiles {
 
 
-    restrict int iTileLinkMap[];
+
+
+    restrict uint iTiles[];
 };
 
 layout(std430, binding = 1)buffer bFirstTileMap {
@@ -38,12 +45,12 @@ int getFirst(uint globalTileIndex){
     return iFirstTileMap[globalTileIndex];
 }
 
-int getNext(int tileIndex){
-    return iTileLinkMap[tileIndex * 2 + 1];
+int getNextTile(int tileIndex){
+    return int(iTiles[tileIndex * 4 + 0]);
 }
 
-void setNext(int tileIndex, int newNextTileIndex){
-    iTileLinkMap[tileIndex * 2 + 1]= newNextTileIndex;
+void setNextTile(int tileIndex, int newNextTileIndex){
+    iTiles[tileIndex * 4 + 0]= uint(newNextTileIndex);
 }
 
 void main(){
@@ -56,23 +63,23 @@ void main(){
 
     while(unsortedFirstTileIndex >= 0){
         int currentTileIndex = unsortedFirstTileIndex;
-        unsortedFirstTileIndex = getNext(currentTileIndex);
+        unsortedFirstTileIndex = getNextTile(currentTileIndex);
 
         int prevTrialTileIndex = - 1;
         int trialTileIndex = sortedFirstTileIndex;
         while(true){
             if(trialTileIndex < 0 || currentTileIndex < trialTileIndex){
                 if(prevTrialTileIndex < 0){
-                    setNext(currentTileIndex, sortedFirstTileIndex);
+                    setNextTile(currentTileIndex, sortedFirstTileIndex);
                     sortedFirstTileIndex = currentTileIndex;
                 } else {
-                    setNext(currentTileIndex, trialTileIndex);
-                    setNext(prevTrialTileIndex, currentTileIndex);
+                    setNextTile(currentTileIndex, trialTileIndex);
+                    setNextTile(prevTrialTileIndex, currentTileIndex);
                 }
                 break;
             }
             prevTrialTileIndex = trialTileIndex;
-            trialTileIndex = getNext(trialTileIndex);
+            trialTileIndex = getNextTile(trialTileIndex);
         }
     }
 

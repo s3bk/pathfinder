@@ -28,14 +28,14 @@ struct bDrawTiles
     uint iDrawTiles[1];
 };
 
-struct bTileLinkMap
-{
-    int iTileLinkMap[1];
-};
-
 struct bIndirectDrawParams
 {
     uint iIndirectDrawParams[1];
+};
+
+struct bAlphaTileIndices
+{
+    uint iAlphaTileIndices[1];
 };
 
 struct bClipTiles
@@ -66,7 +66,7 @@ uint calculateTileIndex(thread const uint& bufferOffset, thread const uint4& til
     return (bufferOffset + (tileCoord.y * (tileRect.z - tileRect.x))) + tileCoord.x;
 }
 
-kernel void main0(constant int& uColumnCount [[buffer(0)]], constant int2& uFramebufferTileSize [[buffer(9)]], const device bBackdrops& _59 [[buffer(1)]], const device bDrawMetadata& _85 [[buffer(2)]], const device bClipMetadata& _126 [[buffer(3)]], device bDrawTiles& _172 [[buffer(4)]], device bTileLinkMap& _192 [[buffer(5)]], device bIndirectDrawParams& _204 [[buffer(6)]], device bClipTiles& _257 [[buffer(7)]], device bClipVertexBuffer& _311 [[buffer(8)]], device bZBuffer& _369 [[buffer(10)]], device bFirstTileMap& _386 [[buffer(11)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
+kernel void main0(constant int& uColumnCount [[buffer(0)]], constant int2& uFramebufferTileSize [[buffer(9)]], const device bBackdrops& _59 [[buffer(1)]], const device bDrawMetadata& _85 [[buffer(2)]], const device bClipMetadata& _126 [[buffer(3)]], device bDrawTiles& _174 [[buffer(4)]], device bIndirectDrawParams& _207 [[buffer(5)]], device bAlphaTileIndices& _215 [[buffer(6)]], device bClipTiles& _267 [[buffer(7)]], device bClipVertexBuffer& _321 [[buffer(8)]], device bZBuffer& _382 [[buffer(10)]], device bFirstTileMap& _399 [[buffer(11)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
 {
     uint columnIndex = gl_GlobalInvocationID.x;
     if (int(columnIndex) >= uColumnCount)
@@ -98,14 +98,16 @@ kernel void main0(constant int& uColumnCount [[buffer(0)]], constant int2& uFram
         uint4 param_1 = drawTileRect;
         uint2 param_2 = drawTileCoord;
         uint drawTileIndex = calculateTileIndex(param, param_1, param_2);
-        uint drawTileWord = _172.iDrawTiles[(drawTileIndex * 4u) + 3u];
-        int delta = int(drawTileWord) >> 24;
-        int drawTileBackdrop = currentBackdrop;
         int drawAlphaTileIndex = -1;
-        if (_192.iTileLinkMap[(drawTileIndex * 2u) + 0u] >= 0)
+        int drawFirstFillIndex = int(_174.iDrawTiles[(drawTileIndex * 4u) + 1u]);
+        int drawBackdropDelta = int(_174.iDrawTiles[(drawTileIndex * 4u) + 2u]) >> 24;
+        uint drawTileWord = _174.iDrawTiles[(drawTileIndex * 4u) + 3u];
+        int drawTileBackdrop = currentBackdrop;
+        if (drawFirstFillIndex >= 0)
         {
-            uint _207 = atomic_fetch_add_explicit((device atomic_uint*)&_204.iIndirectDrawParams[4], 1u, memory_order_relaxed);
-            drawAlphaTileIndex = int(_207);
+            uint _210 = atomic_fetch_add_explicit((device atomic_uint*)&_207.iIndirectDrawParams[4], 1u, memory_order_relaxed);
+            drawAlphaTileIndex = int(_210);
+            _215.iAlphaTileIndices[drawAlphaTileIndex] = drawTileIndex;
         }
         if (clipPathIndex >= 0)
         {
@@ -118,8 +120,8 @@ kernel void main0(constant int& uColumnCount [[buffer(0)]], constant int2& uFram
                 uint4 param_4 = clipTileRect;
                 uint2 param_5 = clipTileCoord;
                 uint clipTileIndex = calculateTileIndex(param_3, param_4, param_5);
-                int clipAlphaTileIndex = int(_257.iClipTiles[(clipTileIndex * 4u) + 1u]);
-                uint clipTileWord = _257.iClipTiles[(clipTileIndex * 4u) + 3u];
+                int clipAlphaTileIndex = int(_267.iClipTiles[(clipTileIndex * 4u) + 1u]);
+                uint clipTileWord = _267.iClipTiles[(clipTileIndex * 4u) + 3u];
                 int clipTileBackdrop = int(clipTileWord) >> 24;
                 if ((clipAlphaTileIndex >= 0) && (drawAlphaTileIndex >= 0))
                 {
@@ -148,23 +150,23 @@ kernel void main0(constant int& uColumnCount [[buffer(0)]], constant int2& uFram
                 drawAlphaTileIndex = -1;
                 drawTileBackdrop = 0;
             }
-            _311.iClipVertexBuffer[drawTileIndex] = clipTileData;
+            _321.iClipVertexBuffer[drawTileIndex] = clipTileData;
         }
-        _172.iDrawTiles[(drawTileIndex * 4u) + 1u] = uint(drawAlphaTileIndex);
-        _172.iDrawTiles[(drawTileIndex * 4u) + 3u] = (drawTileWord & 16777215u) | ((uint(drawTileBackdrop) & 255u) << uint(24));
+        _174.iDrawTiles[(drawTileIndex * 4u) + 2u] = (uint(drawAlphaTileIndex) & 16777215u) | (uint(drawBackdropDelta) << uint(24));
+        _174.iDrawTiles[(drawTileIndex * 4u) + 3u] = (drawTileWord & 16777215u) | (uint(drawTileBackdrop) << uint(24));
         int2 tileCoord_1 = int2(tileX, int(tileY)) + int2(drawTileRect.xy);
         int tileMapIndex = (tileCoord_1.y * uFramebufferTileSize.x) + tileCoord_1.x;
         if ((zWrite && (drawTileBackdrop != 0)) && (drawAlphaTileIndex < 0))
         {
-            int _374 = atomic_fetch_max_explicit((device atomic_int*)&_369.iZBuffer[tileMapIndex], int(drawPathIndex), memory_order_relaxed);
+            int _387 = atomic_fetch_max_explicit((device atomic_int*)&_382.iZBuffer[tileMapIndex], int(drawPathIndex), memory_order_relaxed);
         }
         if ((drawTileBackdrop != 0) || (drawAlphaTileIndex >= 0))
         {
-            int _391 = atomic_exchange_explicit((device atomic_int*)&_386.iFirstTileMap[tileMapIndex], int(drawTileIndex), memory_order_relaxed);
-            int nextTileIndex = _391;
-            _192.iTileLinkMap[(drawTileIndex * 2u) + 1u] = nextTileIndex;
+            int _404 = atomic_exchange_explicit((device atomic_int*)&_399.iFirstTileMap[tileMapIndex], int(drawTileIndex), memory_order_relaxed);
+            int nextTileIndex = _404;
+            _174.iDrawTiles[(drawTileIndex * 4u) + 0u] = uint(nextTileIndex);
         }
-        currentBackdrop += delta;
+        currentBackdrop += drawBackdropDelta;
     }
 }
 

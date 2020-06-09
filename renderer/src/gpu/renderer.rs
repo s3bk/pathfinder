@@ -175,9 +175,8 @@ struct Frame<D> where D: Device {
     quads_vertex_indices_length: usize,
     buffered_fills: Vec<Fill>,
     pending_fills: Vec<Fill>,
-    max_alpha_tile_index: u32,
-    allocated_alpha_tile_page_count: u32,
-    mask_framebuffer: Option<D::Framebuffer>,
+    alpha_tile_count: u32,
+    mask_storage: Option<MaskStorage<D>>,
     // Temporary place that we copy tiles to in order to perform clips, allocated lazily.
     //
     // TODO(pcwalton): This should be sparse, not dense.
@@ -187,6 +186,11 @@ struct Frame<D> where D: Device {
     dest_blend_framebuffer: D::Framebuffer,
     intermediate_dest_framebuffer: D::Framebuffer,
     texture_metadata_texture: D::Texture,
+}
+
+struct MaskStorage<D> where D: Device {
+    framebuffer: D::Framebuffer,
+    allocated_page_count: u32,
 }
 
 impl<D> Renderer<D> where D: Device {
@@ -308,7 +312,7 @@ impl<D> Renderer<D> where D: Device {
         self.current_timer = Some(PendingTimer::new());
         self.stats = RenderStats::default();
 
-        self.back_frame.max_alpha_tile_index = 0;
+        self.back_frame.alpha_tile_count = 0;
     }
 
     pub fn render_command(&mut self, command: &RenderCommand) {
@@ -346,12 +350,11 @@ impl<D> Renderer<D> where D: Device {
             RenderCommand::DrawTiles(ref batch) => {
                 let batch_info = self.back_frame.tile_batch_info[batch.tile_batch_id.0 as usize];
                 self.draw_tiles(batch_info.tile_count,
-                                batch_info.tile_vertex_storage_id,
                                 batch.color_texture,
                                 batch.blend_mode,
                                 batch.filter,
                                 batch_info.z_buffer_storage_id,
-                                batch_info.d3d11_info)
+                                batch_info.level_info)
             }
             RenderCommand::Finish { cpu_build_time } => {
                 self.stats.cpu_build_time = cpu_build_time;
@@ -478,23 +481,25 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn reallocate_alpha_tile_pages_if_necessary(&mut self, copy_existing: bool) {
-        let alpha_tile_pages_needed =
-            ((self.back_frame.max_alpha_tile_index + 0xffff) >> 16) as u32;
-        if alpha_tile_pages_needed <= self.back_frame.allocated_alpha_tile_page_count {
-            return;
+        let alpha_tile_pages_needed = ((self.back_frame.alpha_tile_count + 0xffff) >> 16) as u32;
+        if let Some(ref mask_storage) = self.back_frame.mask_storage {
+            if alpha_tile_pages_needed <= mask_storage.allocated_page_count {
+                return;
+            }
         }
 
         let new_size = vec2i(MASK_FRAMEBUFFER_WIDTH,
                              MASK_FRAMEBUFFER_HEIGHT * alpha_tile_pages_needed as i32);
         let mask_texture = self.device.create_texture(TextureFormat::RGBA16F, new_size);
-        let old_mask_framebuffer =
-            mem::replace(&mut self.back_frame.mask_framebuffer,
-                         Some(self.device.create_framebuffer(mask_texture)));
-        self.back_frame.allocated_alpha_tile_page_count = alpha_tile_pages_needed;
+        let old_mask_storage = self.back_frame.mask_storage.take();
+        self.back_frame.mask_storage = Some(MaskStorage {
+            framebuffer: self.device.create_framebuffer(mask_texture),
+            allocated_page_count: alpha_tile_pages_needed,
+        });
 
         // Copy over existing content if needed.
-        let old_mask_framebuffer = match old_mask_framebuffer {
-            Some(old_mask_framebuffer) if copy_existing => old_mask_framebuffer,
+        let old_mask_framebuffer = match old_mask_storage {
+            Some(old_storage) if copy_existing => old_storage.framebuffer,
             Some(_) | None => return,
         };
         let old_mask_texture = self.device.framebuffer_texture(&old_mask_framebuffer);
@@ -504,7 +509,11 @@ impl<D> Renderer<D> where D: Device {
         self.device.begin_timer_query(&timer_query);
 
         self.device.draw_elements(6, &RenderState {
-            target: &RenderTarget::Framebuffer(self.back_frame.mask_framebuffer.as_ref().unwrap()),
+            target: &RenderTarget::Framebuffer(&self.back_frame
+                                                    .mask_storage
+                                                    .as_ref()
+                                                    .unwrap()
+                                                    .framebuffer),
             program: &self.blit_program.program,
             vertex_array: &self.back_frame.blit_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
@@ -633,7 +642,7 @@ impl<D> Renderer<D> where D: Device {
         } 
     }
 
-    fn allocate_tiles(&mut self, tile_count: u32) -> StorageID {
+    fn allocate_tiles_d3d9(&mut self, tile_count: u32) -> StorageID {
         let device = &self.device;
         let tile_program = &self.tile_program;
         let tile_copy_program = &self.tile_copy_program;
@@ -649,6 +658,14 @@ impl<D> Renderer<D> where D: Device {
         })
     }
 
+    fn allocate_tiles_d3d11(&mut self, tile_count: u32) -> StorageID {
+        let device = &self.device;
+        self.back_frame
+            .storage_allocators
+            .tiles_d3d11
+            .allocate_buffer(device, tile_count as u64, BufferTarget::Storage)
+    }
+
     fn upload_tiles(&mut self, storage_id: StorageID, tiles: &[TileObjectPrimitive]) {
         let vertex_buffer = &self.back_frame
                                  .storage_allocators
@@ -660,17 +677,10 @@ impl<D> Renderer<D> where D: Device {
         self.ensure_index_buffer(tiles.len());
     }
 
-    fn allocate_tile_link_map(&mut self, tile_count: u32) -> StorageID {
-        self.back_frame.storage_allocators.tile_link_map.allocate_buffer(&self.device,
-                                                                         tile_count as u64,
-                                                                         BufferTarget::Storage)
-    }
-
-    fn initialize_tiles(&mut self,
-                        tile_storage_id: StorageID,
-                        tile_link_map_storage_id: StorageID,
-                        tile_count: u32,
-                        tile_path_info: &[TilePathInfo]) {
+    fn initialize_tiles_d3d11(&mut self,
+                              tiles_d3d11_storage_id: StorageID,
+                              tile_count: u32,
+                              tile_path_info: &[TilePathInfo]) {
         let init_program = &self.d3d11_programs
                                 .as_ref()
                                 .expect("Initializing tiles on GPU requires D3D11 programs!")
@@ -693,15 +703,9 @@ impl<D> Renderer<D> where D: Device {
 
         let tiles_buffer = &self.back_frame
                                 .storage_allocators
-                                .tile_vertex
-                                .get(tile_storage_id)
-                                .vertex_buffer;
-
-        // Allocate tile link map.
-        let tile_link_map_buffer = &self.back_frame
-                                        .storage_allocators
-                                        .tile_link_map
-                                        .get(tile_link_map_storage_id);
+                                .tiles_d3d11
+                                .get(tiles_d3d11_storage_id)
+                                .buffer;
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
@@ -716,9 +720,8 @@ impl<D> Renderer<D> where D: Device {
             ],
             images: &[],
             storage_buffers: &[
-                (&init_program.tiles_storage_buffer, tiles_buffer),
                 (&init_program.tile_path_info_storage_buffer, &tile_path_info_buffer.buffer),
-                (&init_program.tile_link_map_storage_buffer, &tile_link_map_buffer.buffer),
+                (&init_program.tiles_storage_buffer, tiles_buffer),
             ],
         });
 
@@ -908,9 +911,7 @@ impl<D> Renderer<D> where D: Device {
     fn bin_segments_via_compute(&mut self,
                                 microlines_storage: &MicrolinesStorage,
                                 propagate_metadata_storage_ids: &PropagateMetadataStorageIDs,
-                                tile_storage_id: StorageID,
-                                tile_link_map_storage_id: StorageID,
-                                tile_count: u32)
+                                tiles_d3d11_storage_id: StorageID)
                                 -> Option<FillComputeStorageInfo> {
         let bin_compute_program = &self.d3d11_programs
                                        .as_ref()
@@ -945,11 +946,11 @@ impl<D> Renderer<D> where D: Device {
                                      .get(microlines_storage.storage_id)
                                      .buffer;
 
-        let alpha_tile_buffer = &self.back_frame
-                                     .storage_allocators
-                                     .tile_vertex
-                                     .get(tile_storage_id)
-                                     .vertex_buffer;
+        let tiles_buffer = &self.back_frame
+                                .storage_allocators
+                                .tiles_d3d11
+                                .get(tiles_d3d11_storage_id)
+                                .buffer;
         let propagate_metadata_storage_buffer =
             self.back_frame
                 .storage_allocators
@@ -965,34 +966,11 @@ impl<D> Renderer<D> where D: Device {
             &fill_vertex_storage.indirect_draw_params_buffer
                                 .as_ref()
                                 .expect("Where's the indirect draw params buffer?");
-        let indirect_draw_params = [
-            6, 0, 0, 0,
-            self.back_frame.max_alpha_tile_index, microlines_storage.count, 0, 0,
-        ];
+        let indirect_draw_params = [6, 0, 0, 0, 0, microlines_storage.count, 0, 0];
         self.device.upload_to_buffer::<u32>(&indirect_draw_params_buffer,
                                             0,
                                             &indirect_draw_params,
                                             BufferTarget::Storage);
-
-        let mut storage_buffers = vec![
-            (&bin_compute_program.metadata_storage_buffer,
-             &propagate_metadata_storage_buffer.buffer),
-            (&bin_compute_program.fills_storage_buffer, &fill_vertex_storage.vertex_buffer),
-            (&bin_compute_program.indirect_draw_params_storage_buffer,
-             indirect_draw_params_buffer),
-            (&bin_compute_program.tiles_storage_buffer, alpha_tile_buffer),
-            (&bin_compute_program.microlines_storage_buffer, microlines_buffer),
-            (&bin_compute_program.backdrops_storage_buffer, backdrops_storage_buffer),
-        ];
-
-        let tile_link_map_buffer = &self.back_frame
-                                        .storage_allocators
-                                        .tile_link_map
-                                        .get(tile_link_map_storage_id)
-                                        .buffer;
-
-        storage_buffers.push((&bin_compute_program.tile_link_map_storage_buffer,
-                              &tile_link_map_buffer));
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
@@ -1013,7 +991,16 @@ impl<D> Renderer<D> where D: Device {
                  UniformData::Int(self.allocated_fill_count as i32)),
             ],
             images: &[],
-            storage_buffers: &storage_buffers,
+            storage_buffers: &[
+                (&bin_compute_program.microlines_storage_buffer, microlines_buffer),
+                (&bin_compute_program.metadata_storage_buffer,
+                 &propagate_metadata_storage_buffer.buffer),
+                (&bin_compute_program.indirect_draw_params_storage_buffer,
+                 indirect_draw_params_buffer),
+                (&bin_compute_program.fills_storage_buffer, &fill_vertex_storage.vertex_buffer),
+                (&bin_compute_program.tiles_storage_buffer, tiles_buffer),
+                (&bin_compute_program.backdrops_storage_buffer, backdrops_storage_buffer),
+            ],
         });
 
         self.device.end_timer_query(&timer_query);
@@ -1035,13 +1022,7 @@ impl<D> Renderer<D> where D: Device {
 
         self.stats.fill_count += needed_fill_count as usize;
 
-        Some(FillComputeStorageInfo {
-            fill_storage_id,
-            tile_link_map_storage_id,
-            // FIXME(pcwalton): Don't process all tiles!
-            first_fill_tile: 0,
-            fill_tile_count: tile_count,
-        })
+        Some(FillComputeStorageInfo { fill_storage_id })
     }
 
     fn add_fills(&mut self, fill_batch: &[Fill]) {
@@ -1051,12 +1032,12 @@ impl<D> Renderer<D> where D: Device {
 
         self.stats.fill_count += fill_batch.len();
 
-        let preserve_alpha_mask_contents = self.back_frame.max_alpha_tile_index > 0;
+        let preserve_alpha_mask_contents = self.back_frame.alpha_tile_count > 0;
 
         self.back_frame.pending_fills.reserve(fill_batch.len());
         for fill in fill_batch {
-            self.back_frame.max_alpha_tile_index =
-                self.back_frame.max_alpha_tile_index.max(fill.link + 1);
+            self.back_frame.alpha_tile_count =
+                self.back_frame.alpha_tile_count.max(fill.link + 1);
             self.back_frame.pending_fills.push(*fill);
         }
 
@@ -1144,10 +1125,11 @@ impl<D> Renderer<D> where D: Device {
         self.device.begin_timer_query(&timer_query);
 
         self.device.draw_elements_instanced(6, fill_count, &RenderState {
-            target: &RenderTarget::Framebuffer(self.back_frame
-                                                   .mask_framebuffer
-                                                   .as_ref()
-                                                   .expect("Where's the mask framebuffer?")),
+            target: &RenderTarget::Framebuffer(&self.back_frame
+                                                    .mask_storage
+                                                    .as_ref()
+                                                    .expect("Where's the mask storage?")
+                                                    .framebuffer),
             program: &fill_raster_program.program,
             vertex_array: &fill_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
@@ -1183,13 +1165,11 @@ impl<D> Renderer<D> where D: Device {
 
     fn draw_fills_via_compute(&mut self,
                               fill_storage_info: &FillComputeStorageInfo,
-                              tile_storage_id: StorageID) {
-        let &FillComputeStorageInfo {
-            fill_storage_id,
-            tile_link_map_storage_id,
-            first_fill_tile,
-            fill_tile_count,
-        } = fill_storage_info;
+                              tiles_d3d11_storage_id: StorageID,
+                              alpha_tile_indices_storage_id: StorageID,
+                              propagate_tiles_info: &PropagateTilesInfo) {
+        let &FillComputeStorageInfo { fill_storage_id } = fill_storage_info;
+        let &PropagateTilesInfo { alpha_tile_count } = propagate_tiles_info;
 
         let fill_compute_program = match self.fill_program {
             FillProgram::Compute(ref fill_compute_program) => fill_compute_program,
@@ -1201,47 +1181,47 @@ impl<D> Renderer<D> where D: Device {
                                       .fill_vertex
                                       .get(fill_storage_id);
 
-        let tile_link_map_buffer = &self.back_frame
-                                        .storage_allocators
-                                        .tile_link_map
-                                        .get(tile_link_map_storage_id)
-                                        .buffer;
+        let mask_storage = self.back_frame
+                               .mask_storage
+                               .as_ref()
+                               .expect("Where's the mask storage?");
+        let image_texture = self.device.framebuffer_texture(&mask_storage.framebuffer);
 
-        let mask_framebuffer = self.back_frame
-                                   .mask_framebuffer
-                                   .as_ref()
-                                   .expect("Where's the mask framebuffer?");
-        let image_texture = self.device.framebuffer_texture(mask_framebuffer);
+        let tiles_d3d11_buffer = &self.back_frame
+                                      .storage_allocators
+                                      .tiles_d3d11
+                                      .get(tiles_d3d11_storage_id)
+                                      .buffer;
+
+        let alpha_tile_indices_buffer = &self.back_frame
+                                             .storage_allocators
+                                             .alpha_tile_indices
+                                             .get(alpha_tile_indices_storage_id)
+                                             .buffer;
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
-        let tiles_buffer = &self.back_frame
-                                .storage_allocators
-                                .tile_vertex
-                                .get(tile_storage_id)
-                                .vertex_buffer;
-
         // This setup is an annoying workaround for the 64K limit of compute invocation in OpenGL.
         let dimensions = ComputeDimensions {
-            x: fill_tile_count.min(1 << 15),
-            y: (fill_tile_count + (1 << 15) - 1) >> 15,
+            x: alpha_tile_count.min(1 << 15) as u32,
+            y: ((alpha_tile_count + (1 << 15) - 1) >> 15) as u32,
             z: 1,
         };
-        let fill_tile_range = I32x2::new(0, fill_tile_count as i32) +
-            I32x2::splat(first_fill_tile as i32);
 
         self.device.dispatch_compute(dimensions, &ComputeState {
             program: &fill_compute_program.program,
             textures: &[(&fill_compute_program.area_lut_texture, &self.area_lut_texture)],
             images: &[(&fill_compute_program.dest_image, image_texture, ImageAccess::Write)],
             uniforms: &[
-                (&fill_compute_program.tile_range_uniform, UniformData::IVec2(fill_tile_range)),
+                (&fill_compute_program.alpha_tile_count_uniform,
+                 UniformData::Int(alpha_tile_count as i32)),
             ],
             storage_buffers: &[
                 (&fill_compute_program.fills_storage_buffer, &fill_vertex_storage.vertex_buffer),
-                (&fill_compute_program.tile_link_map_storage_buffer, tile_link_map_buffer),
-                (&fill_compute_program.tiles_storage_buffer, &tiles_buffer),
+                (&fill_compute_program.tiles_storage_buffer, tiles_d3d11_buffer),
+                (&fill_compute_program.alpha_tile_indices_storage_buffer,
+                 &alpha_tile_indices_buffer),
             ],
         });
 
@@ -1253,10 +1233,11 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn clip_tiles(&mut self, clip_storage_id: StorageID, max_clipped_tile_count: u32) {
-        let mask_framebuffer = self.back_frame
-                                   .mask_framebuffer
-                                   .as_ref()
-                                   .expect("Where's the mask framebuffer?");
+        let mask_framebuffer = &self.back_frame
+                                    .mask_storage
+                                    .as_ref()
+                                    .expect("Where's the mask storage?")
+                                    .framebuffer;
         let mask_texture = self.device.framebuffer_texture(mask_framebuffer);
         let mask_texture_size = self.device.texture_size(&mask_texture);
 
@@ -1335,14 +1316,7 @@ impl<D> Renderer<D> where D: Device {
         self.stats.tile_count += batch.tile_count as usize;
 
         // Upload tiles to GPU or allocate them as appropriate.
-        let tile_vertex_storage_id = self.allocate_tiles(batch.tile_count);
-        let tile_link_map_storage_id = match batch.modal {
-            PrepareTilesModalInfo::CPU(ref cpu_info) => {
-                self.upload_tiles(tile_vertex_storage_id, &cpu_info.tiles);
-                None
-            }
-            PrepareTilesModalInfo::GPU(_) => Some(self.allocate_tile_link_map(batch.tile_count)),
-        };
+        let tiles_d3d11_storage_id = self.allocate_tiles_d3d11(batch.tile_count);
 
         // Fetch and/or allocate clip storage as needed.
         let clip_storage_ids = match batch.clipped_path_info {
@@ -1350,11 +1324,16 @@ impl<D> Renderer<D> where D: Device {
                 let clip_batch_id = clipped_path_info.clip_batch_id;
                 let clip_tile_batch_info =
                     self.back_frame.tile_batch_info[clip_batch_id.0 as usize];
+                let (metadata, tiles) = match clip_tile_batch_info.level_info {
+                    TileBatchLevelInfo::D3D11(ref d3d11_info) => {
+                        (d3d11_info.propagate_metadata_storage_id,
+                         d3d11_info.tiles_d3d11_storage_id)
+                    }
+                    TileBatchLevelInfo::D3D9 { .. } => unreachable!(),
+                };
                 Some(ClipStorageIDs {
-                    metadata: clip_tile_batch_info.d3d11_info.as_ref().map(|d3d11_info| {
-                        d3d11_info.propagate_metadata_storage_id
-                    }),
-                    tiles: clip_tile_batch_info.tile_vertex_storage_id,
+                    metadata: Some(metadata),
+                    tiles,
                     vertices: self.allocate_clip_storage(clipped_path_info.max_clipped_tile_count),
                 })
             }
@@ -1366,8 +1345,8 @@ impl<D> Renderer<D> where D: Device {
 
         // Propagate backdrops, bin fills, render fills, and/or perform clipping on GPU if
         // necessary.
-        let d3d11_info = match batch.modal {
-            PrepareTilesModalInfo::CPU(_) => None,
+        let level_info = match batch.modal {
+            PrepareTilesModalInfo::CPU(_) => unimplemented!(),
             PrepareTilesModalInfo::GPU(ref gpu_info) => {
                 // Allocate space for tile lists.
                 let first_tile_map_storage_id = self.allocate_first_tile_map();
@@ -1394,13 +1373,10 @@ impl<D> Renderer<D> where D: Device {
                 // Initialize tiles, and bin segments. We might have to do this twice if our first
                 // attempt runs out of space in the fill buffer.
                 let mut fill_storage_info = None;
-                let tile_link_map_storage_id =
-                    tile_link_map_storage_id.expect("Where's the tile link map?");
                 for _ in 0..2 {
-                    self.initialize_tiles(tile_vertex_storage_id,
-                                          tile_link_map_storage_id,
-                                          batch.tile_count,
-                                          &gpu_info.tile_path_info);
+                    self.initialize_tiles_d3d11(tiles_d3d11_storage_id,
+                                                batch.tile_count,
+                                                &gpu_info.tile_path_info);
 
                     self.upload_initial_backdrops(propagate_metadata_storage_ids.backdrops,
                                                   &gpu_info.backdrops);
@@ -1408,9 +1384,7 @@ impl<D> Renderer<D> where D: Device {
                     fill_storage_info =
                         self.bin_segments_via_compute(&microlines_storage,
                                                       &propagate_metadata_storage_ids,
-                                                      tile_vertex_storage_id,
-                                                      tile_link_map_storage_id,
-                                                      batch.tile_count);
+                                                      tiles_d3d11_storage_id);
                     if fill_storage_info.is_some() {
                         break;
                     }
@@ -1418,26 +1392,36 @@ impl<D> Renderer<D> where D: Device {
                 let fill_storage_info =
                     fill_storage_info.expect("Ran out of space for fills when binning!");
 
-                self.propagate_tiles(gpu_info.backdrops.len() as u32,
-                                     tile_vertex_storage_id,
-                                     fill_storage_info.fill_storage_id,
-                                     z_buffer_storage_id,
-                                     tile_link_map_storage_id,
-                                     first_tile_map_storage_id,
-                                     &propagate_metadata_storage_ids,
-                                     clip_storage_ids.as_ref());
+                // TODO(pcwalton): If we run out of space for alpha tile indices, propagate
+                // multiple times.
+
+                let alpha_tile_indices_storage_id =
+                    self.allocate_alpha_tile_indices(batch.tile_count);
+
+                let propagate_tiles_info =
+                    self.propagate_tiles(gpu_info.backdrops.len() as u32,
+                                         tiles_d3d11_storage_id,
+                                         fill_storage_info.fill_storage_id,
+                                         z_buffer_storage_id,
+                                         first_tile_map_storage_id,
+                                         alpha_tile_indices_storage_id,
+                                         &propagate_metadata_storage_ids,
+                                         clip_storage_ids.as_ref());
 
                 // FIXME(pcwalton): Don't unconditionally pass true for copying here.
                 self.reallocate_alpha_tile_pages_if_necessary(true);
-                self.draw_fills_via_compute(&fill_storage_info, tile_vertex_storage_id);
+                self.draw_fills_via_compute(&fill_storage_info,
+                                            tiles_d3d11_storage_id,
+                                            alpha_tile_indices_storage_id,
+                                            &propagate_tiles_info);
 
-                self.sort_tiles(tile_link_map_storage_id,
+                self.sort_tiles(tiles_d3d11_storage_id,
                                 first_tile_map_storage_id);
 
-                Some(TileBatchInfoD3D11 {
+                TileBatchLevelInfo::D3D11(TileBatchInfoD3D11 {
+                    tiles_d3d11_storage_id,
                     propagate_metadata_storage_id:
                         propagate_metadata_storage_ids.propagate_metadata,
-                    tile_link_map_storage_id,
                     first_tile_map_storage_id,
                 })
             }
@@ -1446,9 +1430,8 @@ impl<D> Renderer<D> where D: Device {
         // Record tile batch info.
         self.back_frame.tile_batch_info.insert(batch.batch_id.0 as usize, TileBatchInfo {
             tile_count: batch.tile_count,
-            tile_vertex_storage_id,
             z_buffer_storage_id,
-            d3d11_info,
+            level_info,
         });
 
         // Prepare or upload the Z-buffers as necessary.
@@ -1480,23 +1463,24 @@ impl<D> Renderer<D> where D: Device {
 
     fn propagate_tiles(&mut self,
                        column_count: u32,
-                       tile_storage_id: StorageID,
+                       tiles_d3d11_storage_id: StorageID,
                        fill_storage_id: StorageID,
                        z_buffer_storage_id: StorageID,
-                       tile_link_map_storage_id: StorageID,
                        first_tile_map_storage_id: StorageID,
+                       alpha_tile_indices_storage_id: StorageID,
                        propagate_metadata_storage_ids: &PropagateMetadataStorageIDs,
-                       clip_storage_ids: Option<&ClipStorageIDs>) {
+                       clip_storage_ids: Option<&ClipStorageIDs>)
+                       -> PropagateTilesInfo {
         let propagate_program = &self.d3d11_programs
                                      .as_ref()
                                      .expect("GPU tile propagation requires D3D11 programs!")
                                      .propagate_program;
 
-        let alpha_tile_buffer = &self.back_frame
-                                     .storage_allocators
-                                     .tile_vertex
-                                     .get(tile_storage_id)
-                                     .vertex_buffer;
+        let tiles_d3d11_buffer = &self.back_frame
+                                      .storage_allocators
+                                      .tiles_d3d11
+                                      .get(tiles_d3d11_storage_id)
+                                      .buffer;
         let propagate_metadata_storage_buffer =
             &self.back_frame
                  .storage_allocators
@@ -1521,12 +1505,6 @@ impl<D> Renderer<D> where D: Device {
                                             &vec![0; tile_area],
                                             BufferTarget::Storage);
 
-        let tile_link_map_storage_buffer = &self.back_frame
-                                                .storage_allocators
-                                                .tile_link_map
-                                                .get(tile_link_map_storage_id)
-                                                .buffer;
-
         // TODO(pcwalton): Initialize the first tiles buffer on GPU?
         let first_tile_map_storage_buffer = &self.back_frame
                                                  .storage_allocators
@@ -1537,6 +1515,12 @@ impl<D> Renderer<D> where D: Device {
                                                   0,
                                                   &vec![FirstTile::default(); tile_area],
                                                   BufferTarget::Storage);
+
+        let alpha_tile_indices_storage_buffer = &self.back_frame
+                                                     .storage_allocators
+                                                     .alpha_tile_indices
+                                                     .get(alpha_tile_indices_storage_id)
+                                                     .buffer;
 
         let fill_vertex_storage = self.back_frame
                                       .storage_allocators
@@ -1550,12 +1534,13 @@ impl<D> Renderer<D> where D: Device {
         let mut storage_buffers = vec![
             (&propagate_program.draw_metadata_storage_buffer, propagate_metadata_storage_buffer),
             (&propagate_program.backdrops_storage_buffer, &backdrops_storage_buffer),
-            (&propagate_program.draw_tiles_storage_buffer, alpha_tile_buffer),
+            (&propagate_program.draw_tiles_storage_buffer, tiles_d3d11_buffer),
             (&propagate_program.z_buffer_storage_buffer,
              z_buffer.buffer.as_ref().expect("Where's the Z-buffer?")),
-            (&propagate_program.tile_link_map_storage_buffer, tile_link_map_storage_buffer),
             (&propagate_program.first_tile_map_storage_buffer, first_tile_map_storage_buffer),
             (&propagate_program.indirect_draw_params_storage_buffer, indirect_draw_params_buffer),
+            (&propagate_program.alpha_tile_indices_storage_buffer,
+             alpha_tile_indices_storage_buffer),
         ];
 
         if let Some(clip_storage_ids) = clip_storage_ids {
@@ -1613,23 +1598,27 @@ impl<D> Renderer<D> where D: Device {
         let indirect_draw_params = self.device.recv_buffer(&indirect_draw_params_receiver);
         let indirect_draw_params: &[u32] = indirect_draw_params.as_slice_of().unwrap();
 
-        self.back_frame.max_alpha_tile_index =
+        let alpha_tile_count =
             indirect_draw_params[FILL_INDIRECT_DRAW_PARAMS_ALPHA_TILE_COUNT_INDEX];
+
+        self.back_frame.alpha_tile_count += alpha_tile_count;
+
+        PropagateTilesInfo { alpha_tile_count }
     }
 
     fn sort_tiles(&mut self,
-                  tile_link_map_storage_id: StorageID,
+                  tiles_d3d11_storage_id: StorageID,
                   first_tile_map_storage_id: StorageID) {
         let sort_program = &self.d3d11_programs
                                 .as_ref()
                                 .expect("Tile sorting requires D3D11 programs!")
                                 .sort_program;
 
-        let tile_link_map_buffer = &self.back_frame
-                                        .storage_allocators
-                                        .tile_link_map
-                                        .get(tile_link_map_storage_id)
-                                        .buffer;
+        let tiles_d3d11_buffer = &self.back_frame
+                                      .storage_allocators
+                                      .tiles_d3d11
+                                      .get(tiles_d3d11_storage_id)
+                                      .buffer;
         let first_tile_map_buffer = &self.back_frame
                                          .storage_allocators
                                          .first_tile_map
@@ -1654,7 +1643,7 @@ impl<D> Renderer<D> where D: Device {
                 (&sort_program.tile_count_uniform, UniformData::Int(tile_count)),
             ],
             storage_buffers: &[
-                (&sort_program.tile_link_map_storage_buffer, &tile_link_map_buffer),
+                (&sort_program.tiles_storage_buffer, tiles_d3d11_buffer),
                 (&sort_program.first_tile_map_storage_buffer, &first_tile_map_buffer),
             ],
         });
@@ -1723,6 +1712,13 @@ impl<D> Renderer<D> where D: Device {
             .allocate_buffer(&self.device, area, BufferTarget::Storage)
     }
 
+    fn allocate_alpha_tile_indices(&mut self, index_count: u32) -> StorageID {
+        self.back_frame
+            .storage_allocators
+            .alpha_tile_indices
+            .allocate_buffer(&self.device, index_count as u64, BufferTarget::Storage)
+    }
+
     fn upload_z_buffer(&mut self,
                        z_buffer_storage_id: StorageID,
                        z_buffer_map: &DenseTileMap<i32>) {
@@ -1767,31 +1763,37 @@ impl<D> Renderer<D> where D: Device {
 
     fn draw_tiles(&mut self,
                   tile_count: u32,
-                  tile_storage_id: StorageID,
                   color_texture_0: Option<TileBatchTexture>,
                   blend_mode: BlendMode,
                   filter: Filter,
                   z_buffer_storage_id: StorageID,
-                  d3d11_info: Option<TileBatchInfoD3D11>) {
+                  level_info: TileBatchLevelInfo) {
         match self.tile_program {
             TileProgram::Raster(_) => {
-                self.draw_tiles_via_raster(tile_count,
-                                           tile_storage_id,
-                                           color_texture_0,
-                                           blend_mode,
-                                           filter,
-                                           z_buffer_storage_id)
+                match level_info {
+                    TileBatchLevelInfo::D3D9 { tile_vertex_storage_id } => {
+                        self.draw_tiles_via_raster(tile_count,
+                                                   tile_vertex_storage_id,
+                                                   color_texture_0,
+                                                   blend_mode,
+                                                   filter,
+                                                   z_buffer_storage_id)
+                    }
+                    TileBatchLevelInfo::D3D11(_) => unreachable!(),
+                }
             }
             TileProgram::Compute(_) => {
-                let d3d11_info = d3d11_info.expect("No D3D11 info present!");
-                self.draw_tiles_via_compute(tile_count,
-                                            tile_storage_id,
-                                            d3d11_info.tile_link_map_storage_id,
-                                            d3d11_info.first_tile_map_storage_id,
-                                            color_texture_0,
-                                            blend_mode,
-                                            filter,
-                                            z_buffer_storage_id)
+                match level_info {
+                    TileBatchLevelInfo::D3D11(d3d11_info) => {
+                        self.draw_tiles_via_compute(d3d11_info.tiles_d3d11_storage_id,
+                                                    d3d11_info.first_tile_map_storage_id,
+                                                    color_texture_0,
+                                                    blend_mode,
+                                                    filter,
+                                                    z_buffer_storage_id)
+                    }
+                    TileBatchLevelInfo::D3D9 { .. } => unreachable!(),
+                }
             }
         }
     }
@@ -1875,21 +1877,12 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn draw_tiles_via_compute(&mut self,
-                              tile_count: u32,
-                              tile_storage_id: StorageID,
-                              tile_link_map_storage_id: StorageID,
+                              tiles_d3d11_storage_id: StorageID,
                               first_tile_map_storage_id: StorageID,
                               color_texture_0: Option<TileBatchTexture>,
                               blend_mode: BlendMode,
                               filter: Filter,
                               z_buffer_storage_id: StorageID) {
-        // TODO(pcwalton): Disable blend for solid tiles.
-
-        let needs_readable_framebuffer = blend_mode.needs_readable_framebuffer();
-        if needs_readable_framebuffer {
-            self.copy_alpha_tiles_to_dest_blend_texture(tile_count, tile_storage_id);
-        }
-
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
@@ -1937,16 +1930,11 @@ impl<D> Renderer<D> where D: Device {
             }
         }
 
-        let tiles_buffer = &self.back_frame
-                                .storage_allocators
-                                .tile_vertex
-                                .get(tile_storage_id)
-                                .vertex_buffer;
-        let tile_link_map_storage_buffer = &self.back_frame
-                                                .storage_allocators
-                                                .tile_link_map
-                                                .get(tile_link_map_storage_id)
-                                                .buffer;
+        let tiles_d3d11_buffer = &self.back_frame
+                                      .storage_allocators
+                                      .tiles_d3d11
+                                      .get(tiles_d3d11_storage_id)
+                                      .buffer;
         let first_tile_map_storage_buffer = &self.back_frame
                                                  .storage_allocators
                                                  .first_tile_map
@@ -1965,8 +1953,7 @@ impl<D> Renderer<D> where D: Device {
             textures: &textures,
             images: &images,
             storage_buffers: &[
-                (&tile_compute_program.tiles_storage_buffer, tiles_buffer),
-                (&tile_compute_program.tile_link_map_storage_buffer, tile_link_map_storage_buffer),
+                (&tile_compute_program.tiles_storage_buffer, tiles_d3d11_buffer),
                 (&tile_compute_program.first_tile_map_storage_buffer,
                  first_tile_map_storage_buffer),
             ],
@@ -2008,8 +1995,8 @@ impl<D> Renderer<D> where D: Device {
                        UniformData::IVec2(I32x2::new(TEXTURE_METADATA_TEXTURE_WIDTH,
                                                      TEXTURE_METADATA_TEXTURE_HEIGHT))));
 
-        if let Some(ref mask_framebuffer) = self.back_frame.mask_framebuffer {
-            let mask_texture = self.device.framebuffer_texture(mask_framebuffer);
+        if let Some(ref mask_storage) = self.back_frame.mask_storage {
+            let mask_texture = self.device.framebuffer_texture(&mask_storage.framebuffer);
             uniforms.push((&tile_program.mask_texture_size_0_uniform,
                            UniformData::Vec2(self.device.texture_size(mask_texture).to_f32().0)));
             textures.push((&tile_program.mask_texture_0, mask_texture));
@@ -2462,7 +2449,10 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn mask_viewport(&self) -> RectI {
-        let page_count = self.back_frame.allocated_alpha_tile_page_count as i32;
+        let page_count = match self.back_frame.mask_storage {
+            Some(ref mask_storage) => mask_storage.allocated_page_count as i32,
+            None => 0,
+        };
         let height = MASK_FRAMEBUFFER_HEIGHT * page_count;
         RectI::new(Vector2I::default(), vec2i(MASK_FRAMEBUFFER_WIDTH, height))
     }
@@ -2546,10 +2536,9 @@ impl<D> Frame<D> where D: Device {
             texture_metadata_texture,
             buffered_fills: vec![],
             pending_fills: vec![],
-            max_alpha_tile_index: 0,
-            allocated_alpha_tile_page_count: 0,
+            alpha_tile_count: 0,
             tile_batch_info: VecMap::new(),
-            mask_framebuffer: None,
+            mask_storage: None,
             mask_temp_framebuffer: None,
             intermediate_dest_framebuffer,
             dest_blend_framebuffer,
@@ -2565,15 +2554,20 @@ impl<D> Frame<D> where D: Device {
 #[derive(Clone, Copy)]
 struct TileBatchInfo {
     tile_count: u32,
-    tile_vertex_storage_id: StorageID,
     z_buffer_storage_id: StorageID,
-    d3d11_info: Option<TileBatchInfoD3D11>,
+    level_info: TileBatchLevelInfo,
+}
+
+#[derive(Clone, Copy)]
+enum TileBatchLevelInfo {
+    D3D9 { tile_vertex_storage_id: StorageID },
+    D3D11(TileBatchInfoD3D11),
 }
 
 #[derive(Clone, Copy)]
 struct TileBatchInfoD3D11 {
+    tiles_d3d11_storage_id: StorageID,
     propagate_metadata_storage_id: StorageID,
-    tile_link_map_storage_id: StorageID,
     first_tile_map_storage_id: StorageID,
 }
 
@@ -2843,9 +2837,6 @@ struct FillRasterStorageInfo {
 #[derive(Clone)]
 struct FillComputeStorageInfo {
     fill_storage_id: StorageID,
-    tile_link_map_storage_id: StorageID,
-    fill_tile_count: u32,
-    first_fill_tile: u32,
 }
 
 #[derive(Debug)]
@@ -2923,4 +2914,9 @@ impl<D> SceneSourceBuffers<D> where D: Device {
                                 BufferTarget::Storage);
         self.point_indices_count = segments.indices.len() as u32;
     }
+}
+
+#[derive(Clone, Copy)]
+struct PropagateTilesInfo {
+    alpha_tile_count: u32,
 }

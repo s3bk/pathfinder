@@ -14,8 +14,8 @@ use crate::gpu::options::RendererLevel;
 use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, ClipTileCopyProgram};
 use crate::gpu::shaders::{ClipTileCopyVertexArray, CopyTileProgram, CopyTileVertexArray};
 use crate::gpu::shaders::{FillProgram, FillVertexArray, TileProgram, TileVertexArray};
-use crate::gpu_data::{BackdropInfo, Clip, DiceMetadata, Fill, Microline, PropagateMetadata};
-use crate::gpu_data::{TileObjectPrimitive, TilePathInfo};
+use crate::gpu_data::{AlphaTileId, BackdropInfo, Clip, DiceMetadata, Fill, Microline};
+use crate::gpu_data::{PropagateMetadata, TileD3D11, TileObjectPrimitive, TilePathInfo};
 use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
 use pathfinder_geometry::vector::{Vector2I, vec2i};
 use pathfinder_gpu::{BufferData, BufferTarget, BufferUploadMode, Device};
@@ -34,20 +34,23 @@ const MIN_TILE_STORAGE_CLASS:                    usize = 10;    // 1024 entries,
 const MIN_TILE_PROPAGATE_METADATA_STORAGE_CLASS: usize = 8;     // 256 entries
 const MIN_FIRST_TILE_MAP_STORAGE_CLASS:          usize = 12;    // 4096 entries
 const MIN_CLIP_VERTEX_STORAGE_CLASS:             usize = 10;    // 1024 entries, 16kB
+const MIN_ALPHA_TILE_INDICES_STORAGE_CLASS:      usize = 12;    // 4096 entries, 16kB
 const MIN_BACKDROPS_STORAGE_CLASS:               usize = 12;    // 4096 entries
 const MIN_MICROLINES_STORAGE_CLASS:              usize = 14;    // 16K entries
+const MIN_TILES_D3D11_STORAGE_CLASS:             usize = 10;    // 1024 entries, 20kB
 
 pub(crate) struct StorageAllocators<D> where D: Device {
     pub(crate) path_info: StorageAllocator<StorageBuffer<D, TilePathInfo>>,
     pub(crate) dice_metadata: StorageAllocator<DiceMetadataStorage<D>>,
     pub(crate) fill_vertex: StorageAllocator<FillVertexStorage<D>>,
-    pub(crate) tile_link_map: StorageAllocator<StorageBuffer<D, TileLink>>,
     pub(crate) tile_vertex: StorageAllocator<TileVertexStorage<D>>,
     pub(crate) tile_propagate_metadata: StorageAllocator<StorageBuffer<D, PropagateMetadata>>,
     pub(crate) clip_vertex: StorageAllocator<ClipVertexStorage<D>>,
     pub(crate) first_tile_map: StorageAllocator<StorageBuffer<D, FirstTile>>,
+    pub(crate) alpha_tile_indices: StorageAllocator<StorageBuffer<D, AlphaTileId>>,
     pub(crate) backdrops: StorageAllocator<StorageBuffer<D, BackdropInfo>>,
     pub(crate) microlines: StorageAllocator<StorageBuffer<D, Microline>>,
+    pub(crate) tiles_d3d11: StorageAllocator<StorageBuffer<D, TileD3D11>>,
     pub(crate) z_buffers: ZBufferStorageAllocator<D>,
 }
 
@@ -80,27 +83,29 @@ impl<D> StorageAllocators<D> where D: Device {
         let path_info = StorageAllocator::new(MIN_PATH_INFO_STORAGE_CLASS);
         let dice_metadata = StorageAllocator::new(MIN_DICE_METADATA_STORAGE_CLASS);
         let fill_vertex = StorageAllocator::new(MIN_FILL_STORAGE_CLASS);
-        let tile_link_map = StorageAllocator::new(MIN_TILE_LINK_MAP_STORAGE_CLASS);
         let tile_vertex = StorageAllocator::new(MIN_TILE_STORAGE_CLASS);
         let tile_propagate_metadata =
             StorageAllocator::new(MIN_TILE_PROPAGATE_METADATA_STORAGE_CLASS);
         let clip_vertex = StorageAllocator::new(MIN_CLIP_VERTEX_STORAGE_CLASS);
         let first_tile_map = StorageAllocator::new(MIN_FIRST_TILE_MAP_STORAGE_CLASS);
+        let alpha_tile_indices = StorageAllocator::new(MIN_ALPHA_TILE_INDICES_STORAGE_CLASS);
         let backdrops = StorageAllocator::new(MIN_BACKDROPS_STORAGE_CLASS);
         let microlines = StorageAllocator::new(MIN_MICROLINES_STORAGE_CLASS);
+        let tiles_d3d11 = StorageAllocator::new(MIN_TILES_D3D11_STORAGE_CLASS);
         let z_buffers = ZBufferStorageAllocator::new();
 
         StorageAllocators {
             path_info,
             dice_metadata,
             fill_vertex,
-            tile_link_map,
             tile_vertex,
             tile_propagate_metadata,
             clip_vertex,
             first_tile_map,
+            alpha_tile_indices,
             backdrops,
             microlines,
+            tiles_d3d11,
             z_buffers,
         }
     }
@@ -109,13 +114,14 @@ impl<D> StorageAllocators<D> where D: Device {
         self.path_info.end_frame();
         self.dice_metadata.end_frame();
         self.fill_vertex.end_frame();
-        self.tile_link_map.end_frame();
         self.tile_vertex.end_frame();
         self.tile_propagate_metadata.end_frame();
         self.clip_vertex.end_frame();
         self.first_tile_map.end_frame();
+        self.alpha_tile_indices.end_frame();
         self.backdrops.end_frame();
         self.microlines.end_frame();
+        self.tiles_d3d11.end_frame();
         self.z_buffers.end_frame();
     }
 
@@ -123,13 +129,14 @@ impl<D> StorageAllocators<D> where D: Device {
         self.path_info.gpu_bytes_allocated() +
             self.dice_metadata.gpu_bytes_allocated() +
             self.fill_vertex.gpu_bytes_allocated() +
-            self.tile_link_map.gpu_bytes_allocated() +
             self.tile_vertex.gpu_bytes_allocated() +
             self.tile_propagate_metadata.gpu_bytes_allocated() +
             self.clip_vertex.gpu_bytes_allocated() +
             self.first_tile_map.gpu_bytes_allocated() +
+            self.alpha_tile_indices.gpu_bytes_allocated() +
             self.backdrops.gpu_bytes_allocated() +
             self.microlines.gpu_bytes_allocated() +
+            self.tiles_d3d11.gpu_bytes_allocated() +
             self.z_buffers.gpu_bytes_allocated()
     }
 
@@ -138,13 +145,14 @@ impl<D> StorageAllocators<D> where D: Device {
         println!("path_info {}", self.path_info.gpu_bytes_allocated());
         println!("dice_metadata {}", self.dice_metadata.gpu_bytes_allocated());
         println!("fill_vertex {}", self.fill_vertex.gpu_bytes_allocated());
-        println!("tile_link_map {}", self.tile_link_map.gpu_bytes_allocated());
         println!("tile_vertex {}", self.tile_vertex.gpu_bytes_allocated());
         println!("tile_propagate_metadata {}", self.tile_propagate_metadata.gpu_bytes_allocated());
         println!("clip_vertex {}", self.clip_vertex.gpu_bytes_allocated());
         println!("first_tile_map {}", self.first_tile_map.gpu_bytes_allocated());
+        println!("alpha_tile_indices {}", self.alpha_tile_indices.gpu_bytes_allocated());
         println!("backdrops {}", self.backdrops.gpu_bytes_allocated());
         println!("microlines {}", self.microlines.gpu_bytes_allocated());
+        println!("tiles_d3d11 {}", self.tiles_d3d11.gpu_bytes_allocated());
         println!("z_buffers {}", self.z_buffers.gpu_bytes_allocated());
     }
 }
@@ -301,13 +309,6 @@ pub(crate) struct ClipVertexStorage<D> where D: Device {
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub(crate) struct TileLink {
-    first_fill: i32,
-    next_tile: i32,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
 pub(crate) struct FirstTile {
     first_tile: i32,
 }
@@ -406,7 +407,12 @@ impl<D> TileVertexStorage<D> where D: Device {
                                                               &tile_copy_program,
                                                               &vertex_buffer,
                                                               &quad_vertex_indices_buffer);
-        TileVertexStorage { vertex_buffer, tile_vertex_array, tile_copy_vertex_array, size }
+        TileVertexStorage {
+            vertex_buffer,
+            tile_vertex_array,
+            tile_copy_vertex_array,
+            size,
+        }
     }
 }
 

@@ -52,22 +52,31 @@ vec4 computeCoverage(vec2 from, vec2 to, sampler2D areaLUT){
 
 layout(local_size_x = 16, local_size_y = 4)in;
 
+
+
+
+
+
 uniform writeonly image2D uDest;
 uniform sampler2D uAreaLUT;
-uniform ivec2 uTileRange;
+uniform int uAlphaTileCount;
 
 layout(std430, binding = 0)buffer bFills {
     restrict readonly uint iFills[];
 };
 
-layout(std430, binding = 1)buffer bTileLinkMap {
+layout(std430, binding = 1)buffer bTiles {
 
 
-    restrict readonly int iTileLinkMap[];
+
+
+
+    restrict uint iTiles[];
 };
 
-layout(std430, binding = 2)buffer bTiles {
-    restrict readonly int iTiles[];
+layout(std430, binding = 2)buffer bAlphaTileIndices {
+
+    restrict readonly uint iAlphaTileIndices[];
 };
 
 
@@ -102,20 +111,13 @@ void main(){
     ivec2 tileSubCoord = ivec2(gl_LocalInvocationID . xy)* ivec2(1, 4);
 
 
-    uint tileIndexOffset = gl_WorkGroupID . x |(gl_WorkGroupID . y << 15);
-    uint tileIndex = tileIndexOffset + uint(uTileRange . x);
-    if(tileIndex >= uTileRange . y)
+    uint alphaTileIndex =(gl_WorkGroupID . x |(gl_WorkGroupID . y << 15));
+    if(alphaTileIndex >= uAlphaTileCount)
         return;
 
-    int fillIndex = iTileLinkMap[tileIndex * 2 + 0];
-    if(fillIndex < 0)
-        return;
-
+    uint tileIndex = iAlphaTileIndices[alphaTileIndex];
+    int fillIndex = int(iTiles[tileIndex * 4 + 1]);
     vec4 coverages = accumulateCoverageForFillList(fillIndex, tileSubCoord);
-
-
-
-    uint alphaTileIndex = iTiles[tileIndex * 4 + 1];
 
     ivec2 tileOrigin = ivec2(16, 4)*
         ivec2(alphaTileIndex & 0xff,

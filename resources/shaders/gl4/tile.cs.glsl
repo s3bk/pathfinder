@@ -647,6 +647,11 @@ void computeTileVaryings(vec2 position,
 
 
 
+
+
+
+
+
 uniform int uLoadAction;
 uniform vec4 uClearColor;
 uniform vec2 uTileSize;
@@ -669,17 +674,16 @@ uniform ivec2 uFramebufferTileSize;
 layout(rgba8)uniform image2D uDestImage;
 
 layout(std430, binding = 0)buffer bTiles {
-    restrict uint iTiles[];
+
+
+
+
+
+    restrict readonly uint iTiles[];
 };
 
-layout(std430, binding = 1)buffer bTileLinkMap {
-
-
-    restrict int iTileLinkMap[];
-};
-
-layout(std430, binding = 2)buffer bFirstTileMap {
-    restrict int iFirstTileMap[];
+layout(std430, binding = 1)buffer bFirstTileMap {
+    restrict readonly int iFirstTileMap[];
 };
 
 uint calculateTileIndex(uint bufferOffset, uvec4 tileRect, uvec2 tileCoord){
@@ -687,11 +691,7 @@ uint calculateTileIndex(uint bufferOffset, uvec4 tileRect, uvec2 tileCoord){
 }
 
 ivec2 toImageCoords(ivec2 coords){
-
     return ivec2(coords . x, uFramebufferSize . y - coords . y);
-
-
-
 }
 
 void main(){
@@ -715,7 +715,8 @@ void main(){
             ivec2 tileSubCoord = firstTileSubCoord + ivec2(0, subY);
             vec2 fragCoord = vec2(firstFragCoord + ivec2(0, subY))+ vec2(0.5);
 
-            uint alphaTileIndex = int(iTiles[tileIndex * 4 + 1]);
+            uint alphaTileIndex =
+                iTiles[tileIndex * 4 + 2]& 0x00ffffffu;
             uint tileControlWord = iTiles[tileIndex * 4 + 3];
             uint colorEntry = tileControlWord & 0xffff;
             int tileCtrl = int((tileControlWord >> 16)& 0xff);
@@ -754,7 +755,7 @@ void main(){
             destColors[subY]= destColors[subY]*(1.0 - srcColor . a)+ srcColor;
         }
 
-        tileIndex = iTileLinkMap[tileIndex * 2 + 1];
+        tileIndex = int(iTiles[tileIndex * 4 + 0]);
     }
 
     for(int subY = 0;subY < 4;subY ++)

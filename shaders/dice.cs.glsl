@@ -10,6 +10,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// Chops lines and curves into microlines.
+
 #extension GL_GOOGLE_include_directive : enable
 
 #define BIN_WORKGROUP_SIZE  64

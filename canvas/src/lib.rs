@@ -72,6 +72,7 @@ mod text {
 #[cfg(test)]
 mod tests;
 
+#[derive(Clone)]
 pub struct Canvas {
     scene: Scene,
 }
@@ -172,25 +173,45 @@ impl CanvasRenderingContext2D {
     // Line styles
 
     #[inline]
+    pub fn line_width(&self) -> f32 {
+        self.current_state.line_width
+    }
+    #[inline]
     pub fn set_line_width(&mut self, new_line_width: f32) {
         self.current_state.line_width = new_line_width
     }
 
+    #[inline]
+    pub fn line_cap(&self) -> LineCap {
+        self.current_state.line_cap
+    }
     #[inline]
     pub fn set_line_cap(&mut self, new_line_cap: LineCap) {
         self.current_state.line_cap = new_line_cap
     }
 
     #[inline]
+    pub fn line_join(&self) -> LineJoin {
+        self.current_state.line_join
+    }
+    #[inline]
     pub fn set_line_join(&mut self, new_line_join: LineJoin) {
         self.current_state.line_join = new_line_join
     }
 
     #[inline]
+    pub fn miter_limit(&self) -> f32 {
+        self.current_state.miter_limit
+    }
+    #[inline]
     pub fn set_miter_limit(&mut self, new_miter_limit: f32) {
         self.current_state.miter_limit = new_miter_limit
     }
 
+    #[inline]
+    pub fn line_dash(&self) -> &[f32] {
+        &self.current_state.line_dash
+    }
     #[inline]
     pub fn set_line_dash(&mut self, mut new_line_dash: Vec<f32>) {
         // Duplicate and concatenate if an odd number of dashes are present.
@@ -203,6 +224,10 @@ impl CanvasRenderingContext2D {
         self.current_state.line_dash = new_line_dash
     }
 
+    #[inline]
+    pub fn line_dash_offset(&mut self) -> f32 {
+        self.current_state.line_dash_offset
+    }
     #[inline]
     pub fn set_line_dash_offset(&mut self, new_line_dash_offset: f32) {
         self.current_state.line_dash_offset = new_line_dash_offset

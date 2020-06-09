@@ -26,6 +26,11 @@ layout(local_size_x = 16, local_size_y = 4) in;
 #define LOAD_ACTION_CLEAR   0
 #define LOAD_ACTION_LOAD    1
 
+#define TILE_FIELD_NEXT_TILE_ID             0
+#define TILE_FIELD_FIRST_FILL_ID            1
+#define TILE_FIELD_BACKDROP_ALPHA_TILE_ID   2
+#define TILE_FIELD_CONTROL                  3
+
 uniform int uLoadAction;
 uniform vec4 uClearColor;
 uniform vec2 uTileSize;
@@ -48,17 +53,16 @@ uniform ivec2 uFramebufferTileSize;
 layout(rgba8) uniform image2D uDestImage;
 
 layout(std430, binding = 0) buffer bTiles {
-    restrict uint iTiles[];
+    // [0]: path ID
+    // [1]: next tile ID
+    // [2]: first fill ID
+    // [3]: backdrop delta upper 8 bits, alpha tile ID lower 24 bits
+    // [4]: color/ctrl/backdrop word
+    restrict readonly uint iTiles[];
 };
 
-layout(std430, binding = 1) buffer bTileLinkMap {
-    // [0]: index of first fill in this tile
-    // [1]: index of next tile
-    restrict int iTileLinkMap[];
-};
-
-layout(std430, binding = 2) buffer bFirstTileMap {
-    restrict int iFirstTileMap[];
+layout(std430, binding = 1) buffer bFirstTileMap {
+    restrict readonly int iFirstTileMap[];
 };
 
 uint calculateTileIndex(uint bufferOffset, uvec4 tileRect, uvec2 tileCoord) {
@@ -90,8 +94,9 @@ void main() {
             ivec2 tileSubCoord = firstTileSubCoord + ivec2(0, subY);
             vec2 fragCoord = vec2(firstFragCoord + ivec2(0, subY)) + vec2(0.5);
 
-            uint alphaTileIndex = int(iTiles[tileIndex * 4 + 1]);
-            uint tileControlWord = iTiles[tileIndex * 4 + 3];
+            uint alphaTileIndex =
+                iTiles[tileIndex * 4 + TILE_FIELD_BACKDROP_ALPHA_TILE_ID] & 0x00ffffffu;
+            uint tileControlWord = iTiles[tileIndex * 4 + TILE_FIELD_CONTROL];
             uint colorEntry = tileControlWord & 0xffff;
             int tileCtrl = int((tileControlWord >> 16) & 0xff);
             int backdrop = int(tileControlWord) >> 24;
@@ -129,7 +134,7 @@ void main() {
             destColors[subY] = destColors[subY] * (1.0 - srcColor.a) + srcColor;
         }
 
-        tileIndex = iTileLinkMap[tileIndex * 2 + 1];
+        tileIndex = int(iTiles[tileIndex * 4 + TILE_FIELD_NEXT_TILE_ID]);
     }
 
     for (int subY = 0; subY < 4; subY++)
