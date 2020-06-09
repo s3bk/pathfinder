@@ -18,8 +18,6 @@ struct bTiles
 
 constant uint3 gl_WorkGroupSize [[maybe_unused]] = uint3(16u, 4u, 1u);
 
-constant float3 _1071 = {};
-
 // Implementation of the GLSL mod() function, which is slightly different than Metal fmod()
 template<typename Tx, typename Ty>
 inline Tx mod(Tx x, Ty y)

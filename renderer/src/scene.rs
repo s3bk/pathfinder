@@ -61,21 +61,10 @@ impl Scene {
         }
     }
 
-<<<<<<< HEAD
     pub fn push_draw_path(&mut self, draw_path: DrawPath) {
         let draw_path_index = DrawPathId(self.draw_paths.len() as u32);
         self.draw_paths.push(draw_path);
         self.push_draw_path_with_index(draw_path_index);
-=======
-    pub fn push_draw_path(&mut self, path: DrawPath) {
-        self.push_path(path);
-    }
-
-    pub fn push_path(&mut self, path: DrawPath) {
-        let path_index = self.paths.len() as u32;
-        self.paths.push(path);
-        self.push_path_with_index(path_index);
->>>>>>> 51a7e643ac38993325f7f9fa0893321fa28e84ed
     }
 
     fn push_draw_path_with_index(&mut self, draw_path_id: DrawPathId) {

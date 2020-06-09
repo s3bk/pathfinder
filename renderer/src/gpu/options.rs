@@ -14,6 +14,7 @@ use pathfinder_geometry::vector::Vector2I;
 use pathfinder_gpu::{Device, FeatureLevel};
 
 /// Options that influence rendering.
+#[derive(Clone, Debug)]
 pub struct RendererOptions {
     /// The level of hardware features that the renderer will attempt to use.
     pub level: RendererLevel,
