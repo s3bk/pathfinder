@@ -3,10 +3,22 @@ name = "pathfinder_export"
 version = "0.1.0"
 authors = ["Sebastian Köln <sebk@rynx.org>"]
 edition = "2018"
+features = ["raster"]
+
+[dependencies.surfman]
+git = "https://github.com/servo/surfman"
+rev = "f3df871ac8c3926fe9106d86a3e51e20aa50d3cc"
+features = ["sm-winit", "sm-x11"]
 
 [dependencies]
 pathfinder_color = { path = "../color" }
 pathfinder_content = { path = "../content" }
 pathfinder_geometry = { path = "../geometry" }
 pathfinder_renderer = { path = "../renderer" }
+pathfinder_gl = { path = "../gl" }
+pathfinder_gpu = { path = "../gpu" }
+pathfinder_resources = { path = "../resources" }
 deflate = "*"
+image = "*"
+euclid = "*"
+gl = "*"

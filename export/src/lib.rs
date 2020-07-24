@@ -18,6 +18,10 @@ use std::io::{self, Write};
 mod pdf;
 use pdf::Pdf;
 
+pub mod raster;
+use raster::export_png;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FileFormat {
     /// Scalable Vector Graphics
     SVG,
@@ -27,6 +31,9 @@ pub enum FileFormat {
 
     /// PostScript
     PS,
+
+    /// Portable Network Graphics
+    PNG,
 }
 
 pub trait Export {
@@ -38,7 +45,8 @@ impl Export for Scene {
         match format {
             FileFormat::SVG => export_svg(self, writer),
             FileFormat::PDF => export_pdf(self, writer),
-            FileFormat::PS => export_ps(self, writer)
+            FileFormat::PS => export_ps(self, writer),
+            FileFormat::PNG => export_png(self, writer),
         }
     }
 }
@@ -199,5 +207,3 @@ fn export_ps<W: Write>(scene: &Scene, writer: &mut W) -> io::Result<()> {
     writeln!(writer, "showpage")?;
     Ok(())
 }
-
-
