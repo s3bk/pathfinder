@@ -10,7 +10,7 @@
 
 //! A compressed in-memory representation of a vector path.
 
-use crate::clip::{self, ContourPolygonClipper};
+use crate::clip::{self, ContourPolygonClipper, ContourRectClipper};
 use crate::dilation::ContourDilator;
 use crate::orientation::Orientation;
 use crate::segment::{Segment, SegmentFlags, SegmentKind};
@@ -271,6 +271,17 @@ impl Outline {
 
         for contour in mem::replace(&mut self.contours, vec![]) {
             self.push_contour(ContourPolygonClipper::new(clip_polygon, contour).clip());
+        }
+    }
+
+    /// Clips this outline against the given rectangle.
+    pub fn clip_against_rect(&mut self, clip_rect: RectF) {
+        if clip_rect.contains_rect(self.bounds) {
+            return;
+        }
+
+        for contour in mem::replace(&mut self.contours, vec![]) {
+            self.push_contour(ContourRectClipper::new(clip_rect, contour).clip());
         }
     }
 

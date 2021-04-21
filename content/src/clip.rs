@@ -305,6 +305,39 @@ impl ContourPolygonClipper {
     }
 }
 
+pub struct ContourRectClipper {
+    rect: RectF,
+    contour: Contour,
+}
+impl ContourClipper for ContourRectClipper {
+    type Edge = Edge;
+
+    #[inline]
+    fn contour_mut(&mut self) -> &mut Contour {
+        &mut self.contour
+    }
+}
+impl ContourRectClipper {
+    #[inline]
+    pub(crate) fn new(rect: RectF, contour: Contour) -> ContourRectClipper {
+        ContourRectClipper { rect, contour }
+    }
+    pub(crate) fn clip(mut self) -> Contour {
+        let r = self.rect;
+        let lines = [
+            LineSegment2F::new(r.origin(), r.upper_right()),
+            LineSegment2F::new(r.upper_right(), r.lower_right()),
+            LineSegment2F::new(r.lower_right(), r.lower_left()),
+            LineSegment2F::new(r.lower_left(), r.origin()),
+        ];
+        for &line in &lines {
+            self.clip_against(Edge(line));
+        }
+
+        self.contour
+    }
+}
+
 #[derive(PartialEq)]
 enum EdgeRelativeLocation {
     Intersecting,
