@@ -249,9 +249,7 @@ impl Image {
     /// Returns a non-cryptographic hash of the image, which should be globally unique.
     #[inline]
     pub fn get_hash(&self) -> ImageHash {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        ImageHash(hasher.finish())
+        ImageHash(self.pixels_hash)
     }
 }
 
