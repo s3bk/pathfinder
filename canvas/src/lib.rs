@@ -245,7 +245,7 @@ impl CanvasRenderingContext2D {
     }
 
     #[inline]
-    pub fn line_dash(&mut self) -> &[f32] {
+    pub fn line_dash(&self) -> &[f32] {
         &self.current_state.line_dash
     }
 
