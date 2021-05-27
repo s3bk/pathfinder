@@ -227,15 +227,17 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
         let draw_path_count = self.scene.draw_paths().len();
         let effective_view_box = self.scene.effective_view_box(self.built_options);
 
-        let built_clip_paths = executor.build_vector(clip_path_count, |path_index| {
-            self.build_clip_path_on_cpu(PathBuildParams {
+        let mut built_clip_paths = Vec::with_capacity(clip_path_count);
+        for path_index in 0 .. clip_path_count {
+            let built_path = self.build_clip_path_on_cpu(PathBuildParams {
                 path_id: PathId(path_index as u32),
                 view_box: effective_view_box,
                 prepare_mode: *prepare_mode,
                 built_options: &self.built_options,
                 scene: &self.scene,
-            })
-        });
+            }, &built_clip_paths);
+            built_clip_paths.push(built_path);
+        }
 
         let built_draw_paths = executor.build_vector(draw_path_count, |path_index| {
             self.build_draw_path_on_cpu(DrawPathBuildParams {
@@ -254,9 +256,9 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
         BuiltPaths { draw: built_draw_paths }
     }
 
-    fn build_clip_path_on_cpu(&self, params: PathBuildParams) -> BuiltPath {
+    fn build_clip_path_on_cpu(&self, params: PathBuildParams, clip_paths: &[BuiltPath]) -> BuiltPath {
         let PathBuildParams { path_id, view_box, built_options, scene, prepare_mode } = params;
-        let path_object = &scene.get_clip_path(path_id.to_clip_path_id());
+        let path_object = scene.get_clip_path(path_id.to_clip_path_id());
         let outline = scene.apply_render_options(path_object.outline(), built_options);
 
         let mut tiler = Tiler::new(self,
@@ -266,7 +268,7 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
                                    view_box,
                                    &prepare_mode,
                                    path_object.clip_path(),
-                                   &[],
+                                   clip_paths,
                                    TilingPathInfo::Clip);
 
         tiler.generate_tiles();
@@ -445,8 +447,8 @@ impl BuiltPath {
                                 ctrl: ctrl_byte,
                             }
                         }, tile_bounds),
-                    clip_tiles: match *tiling_path_info {
-                        TilingPathInfo::Draw(_) if clip_path_id.is_some() => {
+                    clip_tiles: match clip_path_id {
+                        Some(_) => {
                             Some(DenseTileMap::from_builder(|_| {
                                 Clip {
                                     dest_tile_id: AlphaTileId(!0),
@@ -456,7 +458,7 @@ impl BuiltPath {
                                 }
                             }, tile_bounds))
                         }
-                        _ => None,
+                        None => None
                     },
                 })
             }
